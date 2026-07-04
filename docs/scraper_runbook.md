@@ -20,7 +20,7 @@ processing pipeline → groundtruth → poser               → final_corpus.jso
 `plan` and `approve` are the two-step human gate: planning never scrapes, and a
 production scrape only runs from a manifest a person approved with a call
 budget. The plan estimate is extraction-aware: `qa` budgets arXiv queries,
-e-print source fetches, and QA-generation calls.
+e-print source fetches, Haiku gate calls, and Sonnet Q+A calls.
 
 ## Prerequisites
 
@@ -98,7 +98,10 @@ icepick processing pipeline --mode production \
 | `qa` | LLM-reformulated question | LLM-extracted, sympy-verified (number/tuple/expr) | **yes** |
 
 `qa` answers are the paper's *stated* result (extract-only prompt), so records
-stay `provenance=extracted` and survive the groundtruth stage.
+stay `provenance=extracted` and survive the groundtruth stage. The repeated
+Anthropic system prompts are sent with ephemeral prompt caching enabled; when
+the SDK reports cache-read/create token counts, they appear in
+`reports/source_report.md`.
 
 ## Run outputs (`$OUT/runs/<run_id>/`)
 
@@ -109,11 +112,13 @@ raw/papers.jsonl              unique paper pool
 raw/extracted_candidates.jsonl
 raw/qa_candidates.jsonl       raw scraper rows (audit)
 raw/quarantined.jsonl         only when candidates were dropped
-reports/source_report.md      counts, warnings, drops, handoff path, acquisition spend
+reports/source_report.md      counts, warnings, drops, spend, throttle/token telemetry
 _progress/                    checkpoint store (production scrapes)
   papers_done.jsonl           per-paper commits — the resume ledger
   candidates.jsonl            durable raw candidates
-  qa_cache.jsonl              cached LLM answers (a resume never re-bills)
+  qa_cache.jsonl              cached Sonnet Q+A answers
+  gate_cache.jsonl            cached Haiku gate verdicts
+  rate_limited_at             last 429/503 timestamp while cooling down
   INCOMPLETE                  present only while a run is unfinished
 ```
 
@@ -127,13 +132,20 @@ crash, or a network death **pauses** the run instead of killing it:
   pipeline never consumes the partial corpus.
 - **To resume, rerun the exact same command**:
   `icepick allocation run --manifest <same path>`. Papers already acquired
-  are served from `_progress/` (no refetch); cached QA answers are free
-  (no re-billing). At most the one in-flight item is redone.
+  are served from `_progress/` (no refetch); cached gate verdicts and QA
+  answers are free (no re-billing). At most uncached work from the one
+  in-flight item is redone.
 - A completed run's rerun is idempotent: everything replays from the
   checkpoint, spending nothing.
 
 `_progress/INCOMPLETE` on disk means the last invocation didn't finish —
 rerun to complete it.
+
+If the last invocation hit arXiv's limiter, `_progress/rate_limited_at` records
+that timestamp. A resume inside the cooldown window refuses to start and prints
+the retry time instead of immediately re-hitting arXiv. Tune the window with
+`ICEPICK_ARXIV_COOLDOWN_SECONDS` (default 1200; set `0` only for deliberate
+operator override).
 
 ## Alternative: bring your own records (manual mount)
 
@@ -153,14 +165,16 @@ icepick allocation mount --path /path/to/drop.jsonl --source my_source \
 | `E_CONFIG ... call budget too low` | budget below the plan estimate | raise `--call-budget` |
 | `E_INVALID ... ANTHROPIC_API_KEY` | `qa` mode without a key/SDK | `export ANTHROPIC_KEY_FILE=/path/to/anthro_key.env` (or `ANTHROPIC_API_KEY`), and `pip install -e .[judge]` |
 | run reports `handoff_records: 0` + "no candidates" | empty window or all cross-lists filtered | widen `--year`/`--month`, or drop `--primary-only`; check the category |
-| read timeout / `429` / `503` / `E_NETWORK` from arXiv | rate-limited or overloaded | requests are auto-paced ≥3s apart and retried with `Retry-After`/backoff; if it persists, raise the gap (`export ICEPICK_ARXIV_MIN_INTERVAL=6`), rerun later, or use bulk data (below). Progress is checkpointed — just rerun to resume. |
+| `arXiv is cooling down ... retry after HH:MM UTC` | a recent 429/503 marker is still fresh | wait until the printed time, then rerun the same command |
+| read timeout / `429` / `503` / `E_NETWORK` from arXiv | rate-limited or overloaded | requests are auto-paced ≥4s apart and retried with `Retry-After`/backoff; if it persists, raise the gap (`export ICEPICK_ARXIV_MIN_INTERVAL=6`), rerun later, or use bulk data (below). Progress is checkpointed — just rerun to resume. |
 
 ## Avoiding arXiv throttling
 
 arXiv asks for **≤1 request every 3 seconds from a single connection**. The
 scraper enforces this automatically: all Atom queries and e-print fetches are
-spaced ≥`ICEPICK_ARXIV_MIN_INTERVAL` seconds apart (default 3), over one reused
-connection, with `Retry-After`-aware backoff on 429/503.
+spaced ≥`ICEPICK_ARXIV_MIN_INTERVAL` seconds apart (default 4), over one reused
+connection, with `Retry-After`-aware backoff on 429/503. After a recovered 429,
+the same run halves subsequent Atom page size from 50 to 25 to reduce pressure.
 
 - **Still throttled?** Raise the gap: `export ICEPICK_ARXIV_MIN_INTERVAL=6` (or
   more). Pacing costs wall-clock, not correctness — and any run is resumable.
