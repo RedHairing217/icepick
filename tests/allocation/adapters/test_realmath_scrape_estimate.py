@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import socket
 
 import pytest
@@ -64,6 +65,28 @@ def test_estimate_is_extraction_aware():
     assert "qa_generation" in qa["call_kinds"]
     # More work per mode ⇒ a higher budgeted call count.
     assert qa["estimated_calls"] > latex["estimated_calls"] > abstract["estimated_calls"]
+
+
+def test_qa_budget_uses_central_ratio_with_explicit_headroom():
+    """The budgeted number is the central expectation × a documented margin.
+
+    Budgeting every paper at the densest observed pull (37 theorems/paper,
+    the ceiling of the 2-37 pilot range) forced operators to approve budgets
+    several times realistic spend, gutting --call-budget as a guardrail. The
+    point estimate must be central, with headroom carried by the explicit
+    multiplier — a dense run past the margin pauses at the cap and resumes,
+    it doesn't over-provision every run.
+    """
+    assert 12 <= realmath_scrape.CANDIDATES_PER_PAPER <= 15
+    assert 1.0 < realmath_scrape.ESTIMATE_SAFETY_MULTIPLIER <= 2.0
+
+    qa = realmath_scrape.estimate(_plan(target_count=10, scrape_window={"extraction": "qa"}))
+    # One Atom page + one e-print fetch per paper + LLM calls, all at the
+    # central ratios — the expectation the multiplier pads.
+    central_expectation = 1 + qa["expected_papers"] + qa["expected_llm_calls"]
+    assert qa["estimated_calls"] == math.ceil(
+        central_expectation * realmath_scrape.ESTIMATE_SAFETY_MULTIPLIER
+    )
 
 
 def test_qa_plan_budget_gate_covers_llm_calls():

@@ -34,6 +34,7 @@ Output layout per run::
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -57,14 +58,26 @@ from icepick.contracts.records import (
     TRUTH_POLICY_VALUES,
 )
 
-# Conservative planning ratios for estimates. Local latex-mode run reports
-# include both sparse (3 theorem candidates/paper) and theorem-dense (60 in one
-# paper) pulls; the attached live-pilot notes for math.NT/math.AP record
-# 2-37 mined theorems/paper and 13-20% gate survival. Estimates round against
-# the operator so allocation never silently increases paid calls mid-run.
+# Planning ratios for estimates. Local latex-mode run reports include both
+# sparse (3 theorem candidates/paper) and theorem-dense (60 in one paper)
+# pulls; the attached live-pilot notes for math.NT/math.AP record 2-37 mined
+# theorems/paper and 13-20% gate survival. CANDIDATES_PER_PAPER is a central
+# value of that 2-37 range, NOT its ceiling: budgeting every paper as if it
+# were the densest observed pull forced operators to approve budgets several
+# times realistic spend, which gutted --call-budget as a guardrail. Headroom
+# for dense pulls comes from ESTIMATE_SAFETY_MULTIPLIER below instead.
+# Estimates still round against the operator so allocation never silently
+# increases paid calls mid-run.
 PAPERS_PER_RECORD = 4
-CANDIDATES_PER_PAPER = 37
+CANDIDATES_PER_PAPER = 13
 QA_GATE_SURVIVAL_PERCENT = 20
+# Safety margin applied to the whole call estimate (rounded up) so routine
+# variance above the central ratios doesn't pause a run at its budget ceiling.
+# A run denser than the margin covers still loses nothing: budget exhaustion
+# checkpoints and pauses (scrape's _BudgetExhausted), and re-running the same
+# command resumes under a freshly approved budget. The multiplier trades that
+# rare pause for a budget number an operator can sanity-check against spend.
+ESTIMATE_SAFETY_MULTIPLIER = 1.5
 _PAGE_SIZE_ESTIMATE = 50  # arXiv Atom results per query (mirrors scrape._PAGE_SIZE)
 
 _PLAN_REQUIRED_FIELDS = {"source_name", "target_count", "requested_by", "requested_at"}
@@ -420,8 +433,11 @@ def _estimated_calls(target_count: int, extraction: str = "abstract") -> int:
     ``abstract`` spends only arXiv Atom queries; ``latex`` adds one e-print
     source fetch per paper; ``qa`` additionally spends one Haiku gate call
     per mined theorem plus one Sonnet reformulation call per gate survivor.
-    The survival estimate uses the upper end of the observed 13-20% range so
-    an approver's ``call_budget`` errs toward finishing without a mid-run pause.
+    Theorem counts use the central CANDIDATES_PER_PAPER ratio; the survival
+    estimate uses the upper end of the observed 13-20% range. The summed
+    expectation is then padded by ESTIMATE_SAFETY_MULTIPLIER, so an approver's
+    ``call_budget`` errs toward finishing without a mid-run pause while
+    staying within sight of realistic spend.
     """
     expected_papers = target_count * PAPERS_PER_RECORD
     calls = max(1, -(-expected_papers // _PAGE_SIZE_ESTIMATE))  # arXiv Atom pages
@@ -431,7 +447,7 @@ def _estimated_calls(target_count: int, extraction: str = "abstract") -> int:
         expected_theorems = expected_papers * CANDIDATES_PER_PAPER
         calls += expected_theorems  # one Haiku gate call per theorem
         calls += -(-expected_theorems * QA_GATE_SURVIVAL_PERCENT // 100)
-    return calls
+    return math.ceil(calls * ESTIMATE_SAFETY_MULTIPLIER)
 
 
 # --- run execution (shared by flow_testing replay and production scrape) ------

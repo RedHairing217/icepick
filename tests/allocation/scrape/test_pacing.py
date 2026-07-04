@@ -200,6 +200,40 @@ def test_scrape_reports_rate_limit_telemetry_and_halves_atom_page(monkeypatch, _
     assert sleeps == [pytest.approx(3.0)]
 
 
+def test_scrape_restores_atom_page_size_after_consecutive_clean_pages(monkeypatch, _fake_net):
+    """Recovery mirror of the halving test: the halved page size ramps back.
+
+    One early 429 must not pin a long run at the 25 floor (doubling its
+    query count) after the endpoint recovers: a streak of
+    ``_PAGE_SIZE_RECOVERY_CLEAN_STREAK`` clean requests steps the page size
+    back up, never above ``_PAGE_SIZE``.
+    """
+    monkeypatch.setattr(source, "_MIN_REQUEST_INTERVAL", 0.0)
+    fake, sleeps, clock = _fake_net([
+        _Resp(status=429),                        # page 1 attempt 1: sets the pending halve
+        _Resp(status=200, text=_ONE_PAPER_FEED),  # page 1 retry: halve applied → 25
+        _Resp(status=200, text=_ONE_PAPER_FEED),  # clean page (repeat paper, deduped)
+        _Resp(status=200, text=_ONE_PAPER_FEED),  # clean page
+        _Resp(status=200, text=_ONE_PAPER_FEED),  # clean page → streak of 3 → back to 50
+        _Resp(status=200, text=_EMPTY_FEED),      # full-size page again, pool exhausted
+    ])
+
+    result = source.scrape(
+        scrape_window={"category": "math.AP"}, source_name="s", target_count=5,
+    )
+
+    assert result.rate_limit_events == 1
+    assert source._PAGE_SIZE_RECOVERY_CLEAN_STREAK == 3  # feed above encodes this streak
+    # Halved after the recovered 429...
+    assert "start=50" in fake.calls[2] and "max_results=25" in fake.calls[2]
+    assert "start=75" in fake.calls[3] and "max_results=25" in fake.calls[3]
+    assert "start=100" in fake.calls[4] and "max_results=25" in fake.calls[4]
+    # ...and restored to the full page size after 3 consecutive clean pages,
+    # advancing by the span each page actually requested. Never above 50.
+    assert "start=125" in fake.calls[5] and "max_results=50" in fake.calls[5]
+    assert len(fake.calls) == 6
+
+
 def test_min_interval_zero_disables_pacing(monkeypatch, _fake_net):
     monkeypatch.setattr(source, "_MIN_REQUEST_INTERVAL", 0.0)
     fake, sleeps, clock = _fake_net([_Resp(), _Resp(), _Resp()])

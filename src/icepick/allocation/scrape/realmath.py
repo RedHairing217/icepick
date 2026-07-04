@@ -67,6 +67,13 @@ _http_context = threading.local()
 # paginate-don't-overload lever.
 _PAGE_SIZE = 50
 _PAGE_SIZE_FLOOR_AFTER_429 = 25
+# Recovery mirror of the halve: after this many consecutive clean (never
+# throttled) paced requests at a reduced page size, double the page size back
+# toward _PAGE_SIZE (never above it). Without a ramp, one early 429 pins a
+# long run at the floor and doubles its query count even after the endpoint
+# recovers; with it, an endpoint that is still unhealthy just re-halves and
+# the streak restarts, so a flapping limiter converges downward.
+_PAGE_SIZE_RECOVERY_CLEAN_STREAK = 3
 _MAX_PAGES = 100  # backstop against runaway pagination (2x pages since pages are half-size)
 
 _ATOM = "{http://www.w3.org/2005/Atom}"
@@ -182,6 +189,7 @@ def scrape(
     rate_limit_backoff_seconds = 0.0
     effective_page_size = _PAGE_SIZE
     pending_429_page_halve = False
+    consecutive_clean_requests = 0  # streak feeding the page-size ramp-up
 
     def acquisition_calls():
         return counts["queries"] + counts["latex_fetches"] + counts["gate_calls"] + counts["qa_calls"]
@@ -200,22 +208,34 @@ def scrape(
 
     def on_rate_limit(status, sleep_seconds):
         nonlocal rate_limit_events, rate_limit_backoff_seconds, pending_429_page_halve
+        nonlocal consecutive_clean_requests
         rate_limit_events += 1
         rate_limit_backoff_seconds += float(sleep_seconds or 0.0)
         status_key = str(status)
         rate_limit_statuses[status_key] = rate_limit_statuses.get(status_key, 0) + 1
+        consecutive_clean_requests = 0  # any throttle event breaks the clean streak
         if int(status) == 429:
             pending_429_page_halve = True
         if checkpoint is not None:
             checkpoint.stamp_rate_limited()
 
     def on_success():
-        nonlocal effective_page_size, pending_429_page_halve
+        nonlocal effective_page_size, pending_429_page_halve, consecutive_clean_requests
         if checkpoint is not None:
             checkpoint.clear_rate_limit()
         if pending_429_page_halve:
             effective_page_size = max(_PAGE_SIZE_FLOOR_AFTER_429, effective_page_size // 2)
             pending_429_page_halve = False
+            consecutive_clean_requests = 0  # recovery request ends the episode; ramp counts from the next one
+        elif effective_page_size < _PAGE_SIZE:
+            # Gentle ramp-up. Every paced arXiv request (Atom page or e-print
+            # fetch) that completes clean is evidence the throttle cleared;
+            # after a streak of them, step the page size back up. Capped at
+            # _PAGE_SIZE — the ramp never grows pages past the configured size.
+            consecutive_clean_requests += 1
+            if consecutive_clean_requests >= _PAGE_SIZE_RECOVERY_CLEAN_STREAK:
+                effective_page_size = min(_PAGE_SIZE, effective_page_size * 2)
+                consecutive_clean_requests = 0
 
     def counting_latex(arxiv_id, **kwargs):
         charge("latex_fetches")
@@ -315,8 +335,9 @@ def scrape(
                         break
                 # Advance by the page size requested, not len(papers): entries
                 # dropped for a missing id still occupy result slots. The page
-                # size may shrink after a recovered 429, so capture it before
-                # the request and advance by that exact slot span.
+                # size may shrink after a recovered 429 (and ramp back up after
+                # a clean streak), so capture it before the request and advance
+                # by that exact slot span.
                 start += page_size
                 if capped:
                     break
