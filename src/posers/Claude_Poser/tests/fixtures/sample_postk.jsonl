@@ -1,0 +1,7 @@
+{"source": "calc_v1", "provenance": "computed", "statement": "Compute the derivative of f(x) = x^2 + 3x at x = 2.", "pass_at_k": 0.95, "n_correct": 19, "n_wrong": 1, "n_degenerate": 0}
+{"source": "calc_v1", "provenance": "computed", "statement": "Find the integral of g(x) = sin(x) on [0, pi].", "pass_at_k": 0.85, "n_correct": 17, "n_wrong": 3, "n_degenerate": 0}
+{"source": "realmath", "provenance": "extracted", "statement": "Let n be a positive integer. Prove that n^2 - n is even.", "pass_at_k": 0.7, "n_correct": 14, "n_wrong": 5, "n_degenerate": 1}
+{"source": "realmath", "provenance": "extracted", "statement": "Using Theorem 3.2 from the previous section, deduce the value of A.", "pass_at_k": 0.1, "n_correct": 2, "n_wrong": 17, "n_degenerate": 1}
+{"source": "realmath", "provenance": "extracted", "statement": "As defined above, the function phi satisfies phi(0) = 1. Compute phi(1).", "pass_at_k": 0.05, "n_correct": 1, "n_wrong": 18, "n_degenerate": 1}
+{"source": "partner_drop", "provenance": "external", "statement": "Compute the value of x given by Equation (4.7) when n = 5.", "pass_at_k": 0.2, "n_correct": 4, "n_wrong": 15, "n_degenerate": 1}
+{"source": "manual_v1", "provenance": "manual", "truth_policy": "trusted", "statement": "What is 2 + 2?", "pass_at_k": 1.0, "n_correct": 20, "n_wrong": 0, "n_degenerate": 0}

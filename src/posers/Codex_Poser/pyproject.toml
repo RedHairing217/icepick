@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codex-poser"
+version = "0.1.0"
+description = "Isolated well-posedness scoring module for post-pass@k records."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Codex_Poser" }]
+dependencies = []
+
+[project.scripts]
+codex-poser = "codex_poser.well_posedness.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

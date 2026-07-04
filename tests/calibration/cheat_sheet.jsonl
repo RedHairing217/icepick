@@ -1,0 +1,2 @@
+{"scenario_id":"sample_pass_k_solved","section":"pass_k","input_uid":"fixture_uid_001","outputs":{"trials":[{"status":"correct"},{"status":"correct"},{"status":"correct"},{"status":"wrong_complete","committed":"7"}]},"provenance":"calibration v0.0.1 stub — replace before any real flow-testing run"}
+{"scenario_id":"sample_judge_pass","section":"judge","input_uid":"fixture_uid_001","outputs":{"verdicts":[{"status":"pass"},{"status":"pass"},{"status":"pass"}],"insufficient_context":false},"provenance":"calibration v0.0.1 stub"}

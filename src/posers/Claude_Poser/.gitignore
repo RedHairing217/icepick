@@ -1,0 +1,27 @@
+# Secrets — never commit
+*.env
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+credentials.json
+
+# Local outputs (run artefacts; regenerate from source)
+out/
+judge_cache.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+build/
+dist/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/

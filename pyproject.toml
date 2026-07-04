@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "icepick"
+version = "0.0.1"
+description = "Portable processing surface for ModelBreaker-style records."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "ModelBreaker" }]
+dependencies = [
+    "sympy>=1.12",
+    "antlr4-python3-runtime==4.11.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+# Required for `processing groundtruth --mode production` and any other
+# stage that calls the Anthropic API directly. Not needed for flow_testing
+# mode (which replays from a calibration sheet) or for the poser stage
+# (which shells out to claude-poser / codex-poser binaries).
+judge = ["anthropic>=0.30"]
+dev = ["pytest>=7", "pytest-cov>=4"]
+
+[project.scripts]
+icepick = "icepick.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

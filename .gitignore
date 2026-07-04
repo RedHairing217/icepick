@@ -1,0 +1,36 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+.envrc
+*.env
+key.env
+anthro_key.env
+openai_key.env
+*.key
+*.pem
+secrets/
+.secrets/
+.pytest_cache/
+.coverage
+htmlcov/
+
+out/
+!out/.gitkeep
+out_flow/
+out_scratch/
+
+.DS_Store
+.idea/
+.vscode/
+
+.mypy_cache/
+# Claude Code: per-user local settings stay out; project settings.json is committed
+.claude/settings.local.json
+# Disabled empty git dir from the vendored Codex_Poser (renamed aside, never commit)
+.git.unused/

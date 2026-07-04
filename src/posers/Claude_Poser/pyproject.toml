@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-poser"
+version = "0.1.0"
+description = "Well-posedness (c01) check module isolated from the ModelBreaker processing pipeline."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# Anthropic provider uses the official SDK.
+anthropic = ["anthropic>=0.40"]
+# OpenAI provider uses stdlib urllib — no extra dependency required.
+# Install both with `pip install -e .[anthropic]`.
+dev = ["pytest>=8"]
+
+[project.scripts]
+claude-poser = "claude_poser.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
