@@ -159,12 +159,14 @@ icepick allocation run \
 **Extraction modes** (`--extraction`):
 - `abstract`: one candidate per paper, statement = paper abstract; no LLM cost
 - `latex`: mine theorem envs from LaTeX source; extracts `\boxed{}` answers; no LLM cost
-- `qa`: **two-stage LLM** — Haiku pre-filter + Sonnet Q+A reformulation. Only extraction mode that produces cascade-ready records.
+- `qa`: **single-stage LLM** — Sonnet Q+A reformulation, one call per mined theorem. Sonnet is the filter (returns nothing for theorems with no single fixed answer). Only extraction mode that produces cascade-ready records.
 
 **QA extraction cost model** (per math.NT theorem, empirical):
-- Haiku gate: $0.0005/call; ~15-20% acceptance rate
-- Sonnet Q+A: $0.005/call on gate survivors
-- Effective: ~$0.00125/theorem (~77% savings vs Sonnet-on-all)
+- Sonnet Q+A: ~$0.005/call, one call per mined theorem
+- A former Haiku pre-filter gate was removed: it accepted every theorem (zero
+  selectivity) while Sonnet did the real filtering, so it was pure cost.
+- Prompt caching does not lower this: the ~480-token QA prompt is below
+  Anthropic's 2048-token minimum cacheable prefix, so `cache_control` reads 0.
 
 **Writes** (`out/intake/runs/<run_id>/`):
 ```
@@ -179,8 +181,8 @@ _progress/                       restartability infra
 ├── papers_done.jsonl            append-only: {arxiv_id, candidates}
 ├── candidates.jsonl             append-only: per-paper committed candidates
 ├── qa_cache.jsonl               keyed by SHA1(statement) → generator result
-├── gate_cache.jsonl             keyed by SHA1(statement) → Haiku gate verdict
 ├── rate_limited_at              ISO timestamp of last 429/503, if cooling down
+├── rate_limit_events.jsonl      append-only 429/503 log: {at, status, backoff_seconds}
 └── INCOMPLETE                   marker while run is unfinished
 ```
 
@@ -400,12 +402,14 @@ network-triggered abort, Ctrl-C, machine reboot), disk state is
 sufficient to resume without redoing completed items.
 
 **In-flight item on interrupt**: discarded and re-run on next invocation.
-- Scraper: in-flight paper's uncached theorems + gate + QA calls repeated
+- Scraper: in-flight paper's uncached theorem QA calls repeated
 - Pass@k: in-flight record's k rollouts repeated
 
-**QA cache**: scraper stashes generator responses in `qa_cache.jsonl` and Haiku gate verdicts in `gate_cache.jsonl`, both keyed by SHA1(statement). Resume hits these caches before charging the call budget, so completed gate/generator work is not re-billed. Gate failures remain fail-open per theorem and are not cached; `QAConfigError` still surfaces as a systemic misconfiguration.
+**QA cache**: scraper stashes generator responses in `qa_cache.jsonl`, keyed by SHA1(statement). Resume hits this cache before charging the call budget, so completed generator work is not re-billed. A theorem the generator can't handle is skipped per-theorem and not cached; `QAConfigError` still surfaces as a systemic misconfiguration.
 
 **arXiv cooldown marker**: a 429/503 stamps `_progress/rate_limited_at`. While the marker is fresher than `ICEPICK_ARXIV_COOLDOWN_SECONDS` (default 1200), a resume refuses to hit arXiv and reports the retry time. Any successful Atom or e-print request clears the marker.
+
+**Throttle telemetry is run-lifetime**: every 429/503 is also appended to `_progress/rate_limit_events.jsonl` (timestamp, status, backoff slept) the moment it happens, before any retry or death. Resumes merge this log, so the `rate_limit_*` numbers in the final report and manifest cover every invocation of the run — including one the limiter killed before its first paper commit, which writes no report of its own. Clearing the cooldown marker never touches this log.
 
 **Cascade retries** live in a separate mechanism — [`poser/cascade.py`](../src/icepick/processing/poser/cascade.py) `_run_stage_with_retries`. Transient network errors get retried per-uid within a stage, up to `--max-retries` attempts with exponential backoff. Different granularity than the scraper/pass@k checkpoints — cascade retries transient failures INSIDE a stage's runtime; scraper/pass@k resume ACROSS invocations.
 
@@ -432,13 +436,13 @@ should read these instead of parsing stdout.
   "counts": {"papers": N, "candidates": N, "duplicates_dropped": N,
              "quarantined": N, "handoff_records": N},
   "spend": {"arxiv_queries": N, "latex_fetches": N,
-            "gate_calls": N, "qa_calls": N,
+            "qa_calls": N,
             "total_calls": N, "call_budget": N,
             "resumed_papers": N,
-            "rate_limit_events": N,
-            "rate_limit_backoff_seconds": N,
+            "rate_limit_events": N,          // run-lifetime, all invocations
+            "rate_limit_backoff_seconds": N, // run-lifetime, all invocations
             "rate_limit_statuses": {"429": N, "503": N},
-            "token_usage": {"gate_cache_read_input_tokens": N,
+            "token_usage": {"qa_input_tokens": N, "qa_output_tokens": N,
                             "qa_cache_read_input_tokens": N}}
 }
 ```
@@ -503,12 +507,12 @@ Run full suite: `pytest` (~420 tests, ~1s). Live tests skipped by default.
 ## Known limitations / open items
 
 - **Groundtruth kill-switched**: 401 on any invocation. Reason and restore procedure in §Kill switches.
-- **Scraper `qa` mode requires network + Anthropic key** (Haiku gate + Sonnet Q+A). `abstract` and `latex` modes work offline (no LLM).
+- **Scraper `qa` mode requires network + Anthropic key** (Sonnet Q+A). `abstract` and `latex` modes work offline (no LLM).
 - **Pass@k `qwen_http` requires a local endpoint** (LM Studio / vLLM / Ollama). Model default `qwen/qwen3-8b`.
 - **`processing pipeline` uses parallel fleet wellposed, not the cascade.** If you want the cascade in the chain, run stages manually.
 - **`pipeline` command does not include the scraper** — scrape output is fed to `pipeline` via `--input`. Two separate operator steps.
 - **Band constant mismatch with MB**: icepick `[0.125, 0.75]` vs MB `[0.125, 0.875]`. Documented in `pass_at_k/config.py`.
-- **QA gate results are not disk-cached**: gate calls re-fire on resume. Delta cost negligible (Haiku, ~$0.0005/call).
+- **QA prompt caching is inert**: the ~480-token QA prompt is below Anthropic's 2048-token minimum cacheable prefix, so `cache_control` reads 0. The block is sent anyway (forward-compatible).
 
 ---
 
@@ -531,7 +535,7 @@ work already done.
 
 - Groundtruth is kill-switched; pipelines skip it (`allocation → cascade → pass@k`).
 - Pass@k policy default is `qwen_http` (via LM Studio at 127.0.0.1:1234).
-- Latest realmath scraper uses two-stage Haiku gate + Sonnet Q+A (see [`allocation/scrape/realmath.py`](../src/icepick/allocation/scrape/realmath.py)).
+- Latest realmath scraper uses single-stage Sonnet Q+A (see [`allocation/scrape/realmath.py`](../src/icepick/allocation/scrape/realmath.py)); the former Haiku pre-filter gate was dropped (zero selectivity).
 - Cascade is 3-stage: `codex:openai → codex:anthropic → claude:openai`.
 - Full test suite: 420 pass, 3 live-only skipped.
 - Empirical cost for 25-record end-to-end pipeline: ~$0.32 with Qwen local; ~$5.60 with all paid backends (~94% cheaper).

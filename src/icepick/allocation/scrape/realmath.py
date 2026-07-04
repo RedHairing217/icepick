@@ -100,11 +100,20 @@ class Paper:
 class ScrapeResult:
     """What ``scrape`` returns: raw candidate rows plus acquisition counts.
 
-    ``queries`` / ``latex_fetches`` / ``gate_calls`` / ``qa_calls`` are the
-    acquisition calls actually spent — the numbers an operator's
-    ``call_budget`` governs and the run report surfaces. ``gate_calls`` is
-    the cheap Haiku theorem-quality pre-filter; ``qa_calls`` is the
-    expensive Sonnet reformulation on gate survivors.
+    ``queries`` / ``latex_fetches`` / ``qa_calls`` are the acquisition calls
+    actually spent — the numbers an operator's ``call_budget`` governs and
+    the run report surfaces. ``qa_calls`` is the Sonnet Q+A reformulation,
+    one call per mined theorem.
+
+    ``surplus`` holds accepted rows that the breadth/target caps kept out of
+    ``candidates``. They are already extracted (and, in qa mode, already paid
+    for), so they are preserved for the operator — never silently dropped.
+
+    The ``rate_limit_*`` fields cover the run's whole lifetime when a
+    checkpoint is in play: 429/503 events are journaled to the progress
+    store as they happen, so throttling that killed an earlier invocation
+    still shows up in the invocation that finally completes. Without a
+    checkpoint they cover this call only.
     """
 
     candidates: list
@@ -112,7 +121,6 @@ class ScrapeResult:
     queries: int
     warnings: list = field(default_factory=list)
     latex_fetches: int = 0
-    gate_calls: int = 0
     qa_calls: int = 0
     rate_limit_events: int = 0
     rate_limit_backoff_seconds: float = 0.0
@@ -120,6 +128,7 @@ class ScrapeResult:
     token_usage: dict = field(default_factory=dict)
     interrupted: bool = False  # stopped early (Ctrl-C); disk state resumes it
     resumed_papers: int = 0  # papers served from the checkpoint, not refetched
+    surplus: list = field(default_factory=list)  # cap overflow — preserved, mount-ready downstream
 
 
 class _BudgetExhausted(BaseException):
@@ -151,7 +160,7 @@ def scrape(
     reposts collapse by arxiv id and by normalised title.
 
     ``call_budget`` is a hard cap on total acquisition calls (arXiv queries
-    + e-print fetches + QA-generation calls), checked before every paid
+    + e-print fetches + Sonnet Q+A calls), checked before every paid
     call: a run never spends past it. Exhausting the budget pauses the run
     exactly like Ctrl-C (``interrupted=True``, checkpointed); each
     re-invocation gets a fresh budget and cached work costs nothing, so
@@ -174,15 +183,11 @@ def scrape(
     family = _lone_family(families)
 
     # Count the calls each extraction mode spends inside the extractor by
-    # wrapping the source fetcher / QA gate / QA generator it uses. A
-    # caller-supplied ``extractor`` is used verbatim (counting is a
-    # production-path concern). The budget is enforced HERE, before each
-    # paid call — a paper with many theorems must not spend past the
-    # approved cap between outer checks. ``gate_calls`` is a separate
-    # counter: the Haiku pre-filter and the Sonnet generator have very
-    # different unit costs, and operators reading the manifest want to
-    # see them broken out so the two-stage cost story is legible.
-    counts = {"queries": 0, "latex_fetches": 0, "gate_calls": 0, "qa_calls": 0}
+    # wrapping the source fetcher / QA generator it uses. A caller-supplied
+    # ``extractor`` is used verbatim (counting is a production-path concern).
+    # The budget is enforced HERE, before each paid call — a paper with many
+    # theorems must not spend past the approved cap between outer checks.
+    counts = {"queries": 0, "latex_fetches": 0, "qa_calls": 0}
     token_usage: dict = {}
     rate_limit_statuses: dict = {}
     rate_limit_events = 0
@@ -192,7 +197,7 @@ def scrape(
     consecutive_clean_requests = 0  # streak feeding the page-size ramp-up
 
     def acquisition_calls():
-        return counts["queries"] + counts["latex_fetches"] + counts["gate_calls"] + counts["qa_calls"]
+        return counts["queries"] + counts["latex_fetches"] + counts["qa_calls"]
 
     def charge(kind):
         if call_budget is not None and acquisition_calls() >= call_budget:
@@ -217,6 +222,9 @@ def scrape(
         if int(status) == 429:
             pending_429_page_halve = True
         if checkpoint is not None:
+            # Durable as it happens: an invocation the limiter kills before
+            # its first paper commit must not take its telemetry with it.
+            checkpoint.record_rate_limit(status, sleep_seconds)
             checkpoint.stamp_rate_limited()
 
     def on_success():
@@ -241,12 +249,6 @@ def scrape(
         charge("latex_fetches")
         return default_latex_source_fetcher(arxiv_id, **kwargs)
 
-    def counting_gate(statement, **kwargs):
-        charge("gate_calls")
-        return default_qa_quality_gate(
-            statement, usage_callback=lambda usage: record_token_usage("gate", usage), **kwargs
-        )
-
     def counting_qa(statement, **kwargs):
         charge("qa_calls")
         return default_qa_generator(
@@ -256,11 +258,9 @@ def scrape(
     if checkpoint is not None:
         checkpoint.enforce_rate_limit_cooldown()
         checkpoint.begin()
-        # Cache wraps the counters, so a cache hit spends (and counts)
-        # nothing. Gate verdicts live in gate_cache.jsonl and generator
-        # responses live in qa_cache.jsonl, avoiding bool/dict collisions
-        # while preserving torn-tail tolerant JSONL semantics.
-        counting_gate = checkpoint.caching_gate(counting_gate)
+        # Cache wraps the counter, so a cache hit spends (and counts)
+        # nothing. Generator responses live in qa_cache.jsonl with
+        # torn-tail tolerant JSONL semantics.
         counting_qa = checkpoint.caching_generator(counting_qa)
 
     if extractor is not None:
@@ -270,7 +270,7 @@ def scrape(
         if extraction == "qa":
             run_extractor = lambda paper: qa_extractor(  # noqa: E731
                 paper, family=family, source_fetcher=counting_latex,
-                generator=counting_qa, quality_gate=counting_gate)
+                generator=counting_qa)
         elif extraction == "latex":
             run_extractor = lambda paper: latex_extractor(  # noqa: E731
                 paper, family=family, source_fetcher=counting_latex)
@@ -278,6 +278,7 @@ def scrape(
             run_extractor = lambda paper: base(paper, family=family)  # noqa: E731
 
     candidates: list = []
+    surplus: list = []
     warnings: list = []
     seen_ids: set = set()
     seen_titles: set = set()
@@ -321,16 +322,20 @@ def scrape(
                             checkpoint.commit(paper.arxiv_id, extracted)
                     kept_this_paper = 0
                     for candidate in extracted:
-                        candidates.append(candidate)
-                        kept_this_paper += 1
-                        if len(candidates) >= target_count:
-                            break
                         # Breadth cap: don't let one theorem-dense paper monopolise
                         # the target. (Spend is bounded separately by call_budget;
                         # in qa mode the extractor has already run, so this limits
-                        # corpus contribution, not LLM calls.)
-                        if max_per_paper and kept_this_paper >= max_per_paper:
-                            break
+                        # corpus contribution, not LLM calls.) Rows past a cap are
+                        # already extracted and paid for — they go to ``surplus``,
+                        # never on the floor.
+                        if (
+                            len(candidates) >= target_count
+                            or (max_per_paper and kept_this_paper >= max_per_paper)
+                        ):
+                            surplus.append(candidate)
+                            continue
+                        candidates.append(candidate)
+                        kept_this_paper += 1
                     if len(candidates) >= target_count:
                         break
                 # Advance by the page size requested, not len(papers): entries
@@ -363,15 +368,28 @@ def scrape(
             f"arXiv scrape for source {source_name!r} produced no candidates for "
             f"query {query!r} (papers seen: {papers_seen}, queries: {counts['queries']})"
         )
-    if target_count:
+    if target_count and len(candidates) > target_count:
+        # Belt-and-braces: the selection loop never overfills, but if a trim
+        # is ever needed it must preserve the overflow, not discard it.
+        surplus[:0] = candidates[target_count:]
         candidates = candidates[:target_count]
+    if checkpoint is not None:
+        # Report run-LIFETIME throttle telemetry, not this invocation's
+        # slice: a prior invocation 429-killed before any paper commit left
+        # its events only in the checkpoint's durable log (its ScrapeResult
+        # never existed). The lifetime totals already include the events
+        # recorded above, so this replaces the in-memory counts.
+        lifetime = checkpoint.rate_limit_telemetry()
+        rate_limit_events = lifetime["events"]
+        rate_limit_backoff_seconds = lifetime["backoff_seconds"]
+        rate_limit_statuses = lifetime["statuses"]
     return ScrapeResult(
         candidates=candidates,
+        surplus=surplus,
         papers_seen=papers_seen,
         queries=counts["queries"],
         warnings=warnings,
         latex_fetches=counts["latex_fetches"],
-        gate_calls=counts["gate_calls"],
         qa_calls=counts["qa_calls"],
         rate_limit_events=rate_limit_events,
         rate_limit_backoff_seconds=rate_limit_backoff_seconds,
@@ -742,44 +760,25 @@ def qa_extractor(
     family: Optional[str] = None,
     source_fetcher: Optional[Callable] = None,
     generator: Optional[Callable] = None,
-    quality_gate: Optional[Callable] = None,
 ) -> list:
     """Deepest extractor: mine theorems, then turn each into a verifiable QA pair.
 
-    Optionally two LLM calls per theorem (mirrors ModelBreaker's
-    two-stage harvest to cut cost dramatically):
+    One LLM call per theorem:
 
-      1. ``quality_gate(statement) -> bool`` — a cheap Haiku call that
-         decides whether the theorem plausibly states a single fixed
-         answer. Rejections skip the expensive generator call entirely.
-         Defaults to a pass-through (no gate) when unset, so a caller
-         with only a fake ``generator`` gets the pre-port single-stage
-         behaviour without needing API credentials. ``scrape()`` wires
-         the real gate explicitly on the production path.
-      2. ``generator(statement) -> {question, answer, ...}`` — the
-         expensive Sonnet Q+A reformulation on gate survivors only.
+      ``generator(statement) -> {question, answer, ...}`` — the Sonnet Q+A
+      reformulation. Sonnet is the filter: it returns ``None`` for theorems
+      that don't yield a single fixed answer, so those are dropped here.
 
-    Both hooks are injectable so tests substitute fakes without touching
+    The generator is injectable so tests substitute a fake without touching
     the SDK. Records stay ``provenance = "extracted"`` — the model is
     instructed to extract, not compute. One theorem the generator can't
     handle is skipped, not fatal.
     """
-    gate = quality_gate if quality_gate is not None else (lambda _stmt: True)
     generate = generator or default_qa_generator
     theorems = latex_extractor(paper, family=family, source_fetcher=source_fetcher)
     candidates: list = []
     for theorem in theorems:
         source_statement = theorem["statement"]
-        # Cheap pre-filter: only spend on the expensive generator when the
-        # gate says the theorem is likely to yield a single fixed answer.
-        try:
-            gate_accepts = bool(gate(source_statement))
-        except QAConfigError:
-            raise
-        except Exception:  # noqa: BLE001 — flaky gate is fail-open; generator gets its shot
-            gate_accepts = True
-        if not gate_accepts:
-            continue
         try:
             qa = generate(source_statement)
         except QAConfigError:
@@ -940,36 +939,6 @@ or
 """
 
 
-# Cheap yes/no gate for theorems, adapted from ModelBreaker's
-# SYSTEM_PROMPT_THEOREM_QUALITY. A Haiku call runs BEFORE the expensive
-# Sonnet Q+A generator so we skip Sonnet cost on theorems that plainly
-# don't fit the single-fixed-answer mould (inequalities, isomorphisms,
-# existence-without-uniqueness, complexity-class membership, etc.).
-_QA_QUALITY_GATE_PROMPT = """You decide whether a mathematics theorem states a single fixed answer that a QA extractor could pull out. Answer yes only when the theorem clearly determines one value / expression / count / equation. Answer no when the main result is an inequality, a bound, a complexity-class membership (X is in NP), an isomorphism or homomorphism, or a mere existence claim without uniqueness.
-
-Accept (yes) shapes:
-- "There exists a unique X such that A" — the unique X is the answer.
-- "The value / formula / limit / integral is Y."
-- "The maximum / minimum of f is M (attained at x0)."
-- "X = Y" (identity — question becomes what is X - Y, answer 0 or the constant remainder).
-- "X has a unique solution in S" or "X has no solutions in S" — count is the answer.
-- Necessary-and-sufficient conditions where one side is a specific numerical value.
-- Exact-complexity results ("running time is exactly Theta(n^2)").
-
-Reject (no) shapes:
-- Inequalities or bounds (Big-O, Big-Omega, "at least n", "at most k") as the main result.
-- Existence without uniqueness ("there exists X such that A" when X isn't uniquely determined).
-- If-and-only-if where NEITHER side is numerical.
-- Belonging to a complexity class ("X is in NP").
-- Isomorphism / homomorphism.
-- Anything ambiguous — err on the side of no.
-
-Respond in strict JSON only:
-{"accept": true}
-or
-{"accept": false}
-"""
-
 _ANTHROPIC_USAGE_FIELDS = (
     "input_tokens",
     "output_tokens",
@@ -990,69 +959,6 @@ def _usage_dict(message) -> dict:
         field: int(getattr(usage, field, 0) or 0)
         for field in _ANTHROPIC_USAGE_FIELDS
     }
-
-
-def default_qa_quality_gate(
-    statement: str,
-    *,
-    model: Optional[str] = None,
-    max_tokens: int = 64,
-    usage_callback: Optional[Callable] = None,
-) -> bool:
-    """Cheap Haiku pre-filter: does this theorem plausibly yield a single fixed answer?
-
-    Returns True to let the expensive generator try, False to skip. The
-    budget cost is ~10x smaller than a full generator call (~50 output
-    tokens vs 500+), and the rejection rate observed on math.NT pilots
-    was ~85%, so this cuts overall Q+A spend by roughly the same factor.
-
-    On network / SDK / parse errors, returns True (fail-open): a flaky
-    gate must not silently prevent extraction — the generator will get
-    its shot and may still succeed. QAConfigError is surfaced so a
-    systemic misconfiguration doesn't hide behind fail-open behaviour.
-    """
-    import json as _json
-
-    from icepick.config import ConfigError, resolve_anthropic_credentials
-
-    try:
-        api_key, file_model = resolve_anthropic_credentials()
-    except ConfigError as exc:
-        raise QAConfigError(str(exc)) from exc
-    # Haiku by default: the gate needs cheap yes/no throughput, not the
-    # reformulation reasoning the generator uses. Operators can override
-    # by pointing ``ANTHROPIC_MODEL`` at a different model, but Sonnet on
-    # a yes/no task is money left on the table.
-    model = model or "claude-haiku-4-5-20251001"
-
-    try:
-        import anthropic
-    except ImportError as exc:
-        raise QAConfigError("qa extraction needs the 'anthropic' SDK (pip install -e .[judge])") from exc
-
-    client = anthropic.Anthropic(api_key=api_key)
-    message = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        system=_cached_system_prompt(_QA_QUALITY_GATE_PROMPT),
-        messages=[{"role": "user", "content": f"Theorem:\n{statement}"}],
-    )
-    if usage_callback is not None:
-        usage_callback(_usage_dict(message))
-    text = "".join(
-        block.text for block in message.content if getattr(block, "type", "") == "text"
-    ).strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:].lstrip()
-    try:
-        data = _json.loads(text)
-    except ValueError:
-        return True  # fail-open on parse errors
-    if not isinstance(data, dict):
-        return True
-    return bool(data.get("accept"))
 
 
 def default_qa_generator(

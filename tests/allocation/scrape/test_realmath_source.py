@@ -116,6 +116,7 @@ def test_scrape_returns_candidates_from_the_feed():
     assert result.papers_seen == 2
     assert len(result.candidates) == 2
     assert {c["arxiv_id"] for c in result.candidates} == {"2604.00001", "2604.00002"}
+    assert result.surplus == []  # nothing capped, nothing to preserve
 
 
 def test_scrape_primary_only_drops_cross_listed_papers():
@@ -181,6 +182,33 @@ def test_scrape_max_per_paper_forces_breadth(monkeypatch):
     per_paper = Counter(c["arxiv_id"] for c in result.candidates)
     assert all(n <= 2 for n in per_paper.values())
     assert len(per_paper) == 2  # breadth: both papers contributed
+    # The cap shapes the corpus, it does not reject: the other 8 accepted
+    # rows of each paper are preserved as surplus, nothing on the floor.
+    assert len(result.surplus) == 16
+    per_paper_surplus = Counter(c["arxiv_id"] for c in result.surplus)
+    assert per_paper_surplus == {"2604.00001": 8, "2604.00002": 8}
+    kept_and_surplus = {c["statement"] for c in result.candidates} | {
+        c["statement"] for c in result.surplus
+    }
+    assert len(kept_and_surplus) == 20  # every extracted row accounted for
+
+
+def test_scrape_target_count_overflow_lands_in_surplus():
+    """Hitting the target mid-paper preserves that paper's remaining rows."""
+    def dense(paper, *, family=None):
+        return [{"arxiv_id": paper.arxiv_id, "statement": f"{paper.arxiv_id} thm {i}"}
+                for i in range(10)]
+
+    result = source.scrape(
+        scrape_window={"category": "math.AP"}, source_name="pde", target_count=3,
+        fetcher=_one_page_fetcher(), extractor=dense,
+    )
+    assert len(result.candidates) == 3
+    # Paper one is already extracted (paid for) in full: 3 kept, 7 preserved.
+    # Paper two is never extracted once the target is met — nothing paid,
+    # nothing owed, so no surplus from it.
+    assert len(result.surplus) == 7
+    assert {c["arxiv_id"] for c in result.surplus} == {"2604.00001"}
 
 
 def test_scrape_call_budget_is_a_hard_cap_on_paid_calls():

@@ -110,24 +110,6 @@ def test_caching_generator_caches_no_answer_results(tmp_path):
     assert calls == ["theorem B"]
 
 
-def test_caching_gate_never_bills_twice(tmp_path):
-    calls = []
-
-    def gate(statement, **kwargs):
-        calls.append(statement)
-        return "accept" in statement
-
-    first = ScrapeCheckpoint(tmp_path / "_progress")
-    cached = first.caching_gate(gate)
-    assert cached("accept theorem") is True
-    assert cached("reject theorem") is False
-    assert cached("accept theorem") is True
-
-    second = ScrapeCheckpoint(tmp_path / "_progress")
-    assert second.caching_gate(gate)("reject theorem") is False
-    assert calls == ["accept theorem", "reject theorem"]
-
-
 def test_rate_limit_marker_blocks_only_during_cooldown(tmp_path, monkeypatch):
     monkeypatch.setenv("ICEPICK_ARXIV_COOLDOWN_SECONDS", "1200")
     now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
@@ -140,6 +122,44 @@ def test_rate_limit_marker_blocks_only_during_cooldown(tmp_path, monkeypatch):
     checkpoint.enforce_rate_limit_cooldown(now=now + timedelta(minutes=21))
     checkpoint.clear_rate_limit()
     checkpoint.enforce_rate_limit_cooldown(now=now)
+
+
+def test_rate_limit_telemetry_accumulates_across_instances(tmp_path):
+    first = ScrapeCheckpoint(tmp_path / "_progress")
+    first.record_rate_limit(429, 3.0)
+    first.record_rate_limit(429, 6.0)
+
+    # A new instance (a resumed invocation) merges the prior events and
+    # keeps counting — the totals cover the run's whole lifetime.
+    second = ScrapeCheckpoint(tmp_path / "_progress")
+    second.record_rate_limit(503, 1.5)
+    assert second.rate_limit_telemetry() == {
+        "events": 3,
+        "backoff_seconds": pytest.approx(10.5),
+        "statuses": {"429": 2, "503": 1},
+    }
+
+
+def test_clearing_the_cooldown_marker_keeps_the_telemetry_log(tmp_path):
+    checkpoint = ScrapeCheckpoint(tmp_path / "_progress")
+    checkpoint.record_rate_limit(429, 3.0)
+    checkpoint.stamp_rate_limited()
+    checkpoint.clear_rate_limit()  # the next successful request drops the marker...
+    assert not (tmp_path / "_progress" / "rate_limited_at").exists()
+    # ...but the event log is history, not transient cooldown state.
+    assert ScrapeCheckpoint(tmp_path / "_progress").rate_limit_telemetry()["events"] == 1
+
+
+def test_torn_rate_limit_event_line_is_skipped_not_fatal(tmp_path):
+    checkpoint = ScrapeCheckpoint(tmp_path / "_progress")
+    checkpoint.record_rate_limit(429, 3.0)
+    with (tmp_path / "_progress" / "rate_limit_events.jsonl").open("a") as fh:
+        fh.write('{"at": "2026-07-04T07:12:51Z", "status": 503, "backoff_')
+    assert ScrapeCheckpoint(tmp_path / "_progress").rate_limit_telemetry() == {
+        "events": 1,
+        "backoff_seconds": pytest.approx(3.0),
+        "statuses": {"429": 1},
+    }
 
 
 def test_torn_final_line_is_skipped_not_fatal(tmp_path):
@@ -233,7 +253,6 @@ def test_qa_resume_rebills_only_the_lost_in_flight_theorem(tmp_path, monkeypatch
         generator_calls.append(statement)
         return {"question": statement, "answer": "1" if "first" in statement else "2"}
 
-    monkeypatch.setattr(source, "default_qa_quality_gate", lambda s, **kw: True)
     monkeypatch.setattr(source, "default_qa_generator", lambda s, **kw: generator(s, **kw))
 
     one_paper_feed = _FEED.split("<entry>")[0] + "<entry>" + _FEED.split("<entry>")[1] + "</feed>"
@@ -278,7 +297,6 @@ def test_budget_is_never_exceeded_mid_paper_and_resume_finishes_the_job(tmp_path
         generator_calls.append(statement)
         return {"question": statement, "answer": str(len(generator_calls))}
 
-    monkeypatch.setattr(source, "default_qa_quality_gate", lambda s, **kw: True)
     monkeypatch.setattr(source, "default_qa_generator", lambda s, **kw: generator(s, **kw))
 
     one_paper_feed = _FEED.split("<entry>")[0] + "<entry>" + _FEED.split("<entry>")[1] + "</feed>"
@@ -290,19 +308,16 @@ def test_budget_is_never_exceeded_mid_paper_and_resume_finishes_the_job(tmp_path
         source_name="s", target_count=20, fetcher=fetcher, call_budget=5,
         checkpoint=ScrapeCheckpoint(progress),
     )
-    # Exactly 5 paid calls: 1 arXiv query + 1 e-print fetch + 2 gate calls
-    # (Haiku pre-filter) + 1 Sonnet generator call. Charge order goes
-    # gate→qa per theorem, so the budget clips between theorem 2's gate
-    # and its generator call.
-    assert first.queries + first.latex_fetches + first.gate_calls + first.qa_calls == 5
-    assert first.gate_calls == 2
-    assert first.qa_calls == 1
+    # Exactly 5 paid calls: 1 arXiv query + 1 e-print fetch + 3 Sonnet Q+A
+    # calls (one per theorem). The budget clips before theorem 4's generator
+    # call, mid-paper.
+    assert first.queries + first.latex_fetches + first.qa_calls == 5
+    assert first.qa_calls == 3
     assert first.interrupted is True
     assert any("call budget 5 exhausted" in w for w in first.warnings)
 
-    # Rerun without a cap: the one paid generator answer and the two prior
-    # gate verdicts come from cache for free. Only uncached gates/generator
-    # calls are billed on resume.
+    # Rerun without a cap: the three paid generator answers come from cache
+    # for free. Only the uncached seven are billed on resume.
     second = source.scrape(
         scrape_window={"category": "math.AP", "extraction": "qa"},
         source_name="s", target_count=20, fetcher=fetcher,
@@ -311,5 +326,4 @@ def test_budget_is_never_exceeded_mid_paper_and_resume_finishes_the_job(tmp_path
     assert second.interrupted is False
     assert len(second.candidates) == 10
     assert len(generator_calls) == 10  # each theorem's generator billed exactly once, ever
-    assert second.qa_calls == 9  # only the unpaid nine on the rerun (theorem 1 hit cache)
-    assert second.gate_calls == 8  # first two gate verdicts hit the new disk cache
+    assert second.qa_calls == 7  # only the unpaid seven on the rerun (theorems 1-3 hit cache)

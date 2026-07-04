@@ -127,6 +127,10 @@ def test_cli_run_dispatches_to_realmath_scrape_adapter(tmp_path, capsys):
     assert run_out["processor_mode"] == "flow_testing"
     assert run_out["calibration_replay"] is True
     assert run_out["counts"]["handoff_records"] > 0
+    # Surplus is always counted (0 here: replay applies no caps) and the
+    # outputs entry appears only when a surplus file was actually written.
+    assert run_out["counts"]["surplus_records"] == 0
+    assert "surplus" not in run_out["outputs"]
     handoff = Path(run_out["outputs"]["handoff"])
     assert handoff.exists()
     lines = [l for l in handoff.read_text().splitlines() if l.strip()]

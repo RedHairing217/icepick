@@ -24,6 +24,9 @@ Output layout per run::
     <output_dir>/runs/<run_id>/
       manifest.json
       handoff/records.jsonl        <- the only file processing consumes
+      handoff/surplus_records.jsonl <- cap overflow, canonical + mount-ready
+                                       (only when the breadth/target caps bit;
+                                       never rejected, just not auto-selected)
       raw/papers.jsonl
       raw/extracted_candidates.jsonl
       raw/qa_candidates.jsonl
@@ -61,16 +64,14 @@ from icepick.contracts.records import (
 # Planning ratios for estimates. Local latex-mode run reports include both
 # sparse (3 theorem candidates/paper) and theorem-dense (60 in one paper)
 # pulls; the attached live-pilot notes for math.NT/math.AP record 2-37 mined
-# theorems/paper and 13-20% gate survival. CANDIDATES_PER_PAPER is a central
-# value of that 2-37 range, NOT its ceiling: budgeting every paper as if it
-# were the densest observed pull forced operators to approve budgets several
-# times realistic spend, which gutted --call-budget as a guardrail. Headroom
-# for dense pulls comes from ESTIMATE_SAFETY_MULTIPLIER below instead.
-# Estimates still round against the operator so allocation never silently
-# increases paid calls mid-run.
+# theorems/paper. CANDIDATES_PER_PAPER is a central value of that 2-37 range,
+# NOT its ceiling: budgeting every paper as if it were the densest observed
+# pull forced operators to approve budgets several times realistic spend,
+# which gutted --call-budget as a guardrail. Headroom for dense pulls comes
+# from ESTIMATE_SAFETY_MULTIPLIER below instead. Estimates still round against
+# the operator so allocation never silently increases paid calls mid-run.
 PAPERS_PER_RECORD = 4
 CANDIDATES_PER_PAPER = 13
-QA_GATE_SURVIVAL_PERCENT = 20
 # Safety margin applied to the whole call estimate (rounded up) so routine
 # variance above the central ratios doesn't pause a run at its budget ceiling.
 # A run denser than the margin covers still loses nothing: budget exhaustion
@@ -165,6 +166,8 @@ class ScrapeRunResult:
     acquisition: Optional[dict] = None  # arXiv/e-print/LLM call counts (production only)
     interrupted: bool = False  # paused (Ctrl-C); rerun the same command to resume
     progress_dir: Optional[Path] = None  # checkpoint store (production only)
+    surplus_count: int = 0  # accepted rows past the caps, preserved (never dropped)
+    surplus_path: Optional[Path] = None  # mount-ready surplus records (only when surplus_count > 0)
 
 
 def plan(request):
@@ -235,10 +238,8 @@ def estimate(plan):
     if extraction in ("latex", "qa"):
         call_kinds.append("latex_source_fetch")
     if extraction == "qa":
-        call_kinds.append("qa_quality_gate")
         call_kinds.append("qa_generation")
-        expected_gate_survivors = -(-expected_candidates * QA_GATE_SURVIVAL_PERCENT // 100)
-        expected_llm_calls = expected_candidates + expected_gate_survivors
+        expected_llm_calls = expected_candidates  # one Sonnet Q+A call per mined theorem
         prerequisites += ["anthropic SDK ([judge] extra)",
                           "Anthropic key via ANTHROPIC_KEY_FILE or ANTHROPIC_API_KEY"]
 
@@ -278,7 +279,6 @@ def run(manifest, *, now: Optional[datetime] = None):
     acquisition = {
         "arxiv_queries": scrape_result.queries,
         "latex_fetches": scrape_result.latex_fetches,
-        "gate_calls": scrape_result.gate_calls,
         "qa_calls": scrape_result.qa_calls,
         "rate_limit_events": scrape_result.rate_limit_events,
         "rate_limit_backoff_seconds": scrape_result.rate_limit_backoff_seconds,
@@ -287,7 +287,6 @@ def run(manifest, *, now: Optional[datetime] = None):
         "total_calls": (
             scrape_result.queries
             + scrape_result.latex_fetches
-            + scrape_result.gate_calls
             + scrape_result.qa_calls
         ),
         "call_budget": manifest.call_budget,
@@ -302,6 +301,7 @@ def run(manifest, *, now: Optional[datetime] = None):
         acquisition=acquisition,
         interrupted=scrape_result.interrupted,
         progress_dir=checkpoint.progress_dir,
+        surplus=scrape_result.surplus,
         now=now,
     )
     if not scrape_result.interrupted:
@@ -431,22 +431,18 @@ def _estimated_calls(target_count: int, extraction: str = "abstract") -> int:
     """Estimate acquisition calls, aware of what each extraction mode spends.
 
     ``abstract`` spends only arXiv Atom queries; ``latex`` adds one e-print
-    source fetch per paper; ``qa`` additionally spends one Haiku gate call
-    per mined theorem plus one Sonnet reformulation call per gate survivor.
-    Theorem counts use the central CANDIDATES_PER_PAPER ratio; the survival
-    estimate uses the upper end of the observed 13-20% range. The summed
-    expectation is then padded by ESTIMATE_SAFETY_MULTIPLIER, so an approver's
-    ``call_budget`` errs toward finishing without a mid-run pause while
-    staying within sight of realistic spend.
+    source fetch per paper; ``qa`` additionally spends one Sonnet Q+A call
+    per mined theorem. Theorem counts use the central CANDIDATES_PER_PAPER
+    ratio. The summed expectation is then padded by ESTIMATE_SAFETY_MULTIPLIER,
+    so an approver's ``call_budget`` errs toward finishing without a mid-run
+    pause while staying within sight of realistic spend.
     """
     expected_papers = target_count * PAPERS_PER_RECORD
     calls = max(1, -(-expected_papers // _PAGE_SIZE_ESTIMATE))  # arXiv Atom pages
     if extraction in ("latex", "qa"):
         calls += expected_papers  # one e-print source fetch per paper
     if extraction == "qa":
-        expected_theorems = expected_papers * CANDIDATES_PER_PAPER
-        calls += expected_theorems  # one Haiku gate call per theorem
-        calls += -(-expected_theorems * QA_GATE_SURVIVAL_PERCENT // 100)
+        calls += expected_papers * CANDIDATES_PER_PAPER  # one Sonnet Q+A call per theorem
     return math.ceil(calls * ESTIMATE_SAFETY_MULTIPLIER)
 
 
@@ -497,6 +493,7 @@ def _write_run(
     acquisition: Optional[dict] = None,
     interrupted: bool = False,
     progress_dir: Optional[Path] = None,
+    surplus: Optional[list] = None,
     now: Optional[datetime] = None,
 ) -> ScrapeRunResult:
     """Normalise candidates and write the full run layout. Shared by both modes."""
@@ -514,6 +511,31 @@ def _write_run(
         for record in result.records:
             record.setdefault("metadata", {})["calibration_replay"] = True
 
+    # Cap overflow ("never reject good theorems"): rows the breadth/target
+    # caps kept out of the handoff are normalised through the same funnel and
+    # preserved next to it, canonical and mount-ready. Rows that duplicate a
+    # handoff statement are redundant, not good surplus — they are dropped
+    # and counted.
+    surplus_result = None
+    surplus_records: list = []
+    surplus_duplicates = 0
+    if surplus:
+        surplus_result = normalise(
+            {
+                "source_name": manifest.source_name,
+                "candidates": list(surplus),
+                "families": list(manifest.families or []),
+                "truth_policy": manifest.truth_policy,
+            }
+        )
+        handoff_statements = {record["statement"] for record in result.records}
+        for record in surplus_result.records:
+            if record["statement"] in handoff_statements:
+                surplus_duplicates += 1
+            else:
+                surplus_records.append(record)
+        surplus_duplicates += surplus_result.duplicates_dropped
+
     manifest_path = write_manifest(manifest, manifest.output_dir)
     raw_dir = run_dir / "raw"
     _write_jsonl(raw_dir / "papers.jsonl", papers)
@@ -526,8 +548,12 @@ def _write_run(
         ],
     )
     _write_jsonl(raw_dir / "qa_candidates.jsonl", candidates)
-    if result.quarantined:
-        _write_jsonl(raw_dir / "quarantined.jsonl", result.quarantined)
+    quarantined_rows = list(result.quarantined) + [
+        {**item, "reason": f"[surplus] {item.get('reason', '')}"}
+        for item in (surplus_result.quarantined if surplus_result else [])
+    ]
+    if quarantined_rows:
+        _write_jsonl(raw_dir / "quarantined.jsonl", quarantined_rows)
     else:
         # A re-run of the same run_id must not leave a stale quarantine file
         # claiming drops that this run never made.
@@ -535,11 +561,24 @@ def _write_run(
 
     handoff_path = run_dir / "handoff" / "records.jsonl"
     _write_jsonl(handoff_path, result.records)
+    surplus_path = run_dir / "handoff" / "surplus_records.jsonl"
+    if surplus_records:
+        _write_jsonl(surplus_path, surplus_records)
+    else:
+        # Same stale-file hygiene as quarantine: a re-run with no surplus
+        # must not leave an old surplus file behind.
+        surplus_path.unlink(missing_ok=True)
 
     warnings = list(extra_warnings or []) + list(result.warnings)
+    if surplus_result:
+        warnings += [f"[surplus] {warning}" for warning in surplus_result.warnings]
     if duplicate_titles:
         warnings.append(
             f"paper pool: dropped {duplicate_titles} duplicate paper titles from raw/papers.jsonl"
+        )
+    if surplus_duplicates:
+        warnings.append(
+            f"surplus: dropped {surplus_duplicates} rows duplicating handoff or surplus statements"
         )
 
     outcome = ScrapeRunResult(
@@ -551,7 +590,7 @@ def _write_run(
         paper_count=len(papers),
         candidate_count=len(candidates),
         duplicates_dropped=result.duplicates_dropped,
-        quarantined_count=len(result.quarantined),
+        quarantined_count=len(quarantined_rows),
         handoff_path=handoff_path,
         manifest_path=manifest_path,
         report_path=run_dir / "reports" / "source_report.md",
@@ -560,8 +599,10 @@ def _write_run(
         acquisition=acquisition,
         interrupted=interrupted,
         progress_dir=progress_dir,
+        surplus_count=len(surplus_records),
+        surplus_path=surplus_path if surplus_records else None,
     )
-    _write_report(outcome, result, created_at=now)
+    _write_report(outcome, result, quarantined_rows=quarantined_rows, created_at=now)
     return outcome
 
 
@@ -763,8 +804,20 @@ def _write_jsonl(path: Path, rows) -> Path:
     return path
 
 
-def _write_report(outcome: ScrapeRunResult, result: NormaliseResult, *, created_at: datetime) -> Path:
-    """Markdown source report: outcome first, then counts, warnings, drops."""
+def _write_report(
+    outcome: ScrapeRunResult,
+    result: NormaliseResult,
+    *,
+    quarantined_rows: Optional[list] = None,
+    created_at: datetime,
+) -> Path:
+    """Markdown source report: outcome first, then counts, warnings, drops.
+
+    ``quarantined_rows`` is the merged main + surplus quarantine list backing
+    ``raw/quarantined.jsonl``; it defaults to the main pool's for callers that
+    have no surplus.
+    """
+    quarantined_rows = result.quarantined if quarantined_rows is None else quarantined_rows
     provenance_counts: dict = {}
     for record in result.records:
         provenance_counts[record["provenance"]] = provenance_counts.get(record["provenance"], 0) + 1
@@ -805,8 +858,26 @@ def _write_report(outcome: ScrapeRunResult, result: NormaliseResult, *, created_
         f"| duplicate statements dropped | {outcome.duplicates_dropped} |",
         f"| quarantined | {outcome.quarantined_count} |",
         f"| handoff records | {outcome.record_count} |",
+        f"| surplus records (cap overflow, preserved) | {outcome.surplus_count} |",
         "",
     ]
+    if outcome.surplus_count:
+        lines += [
+            "## Surplus — accepted past the caps",
+            "",
+            f"{outcome.surplus_count} accepted theorems exceeded the breadth/target caps",
+            "(`max_per_paper` / `target_count`). They are never rejected: already",
+            "canonical and mount-ready at:",
+            "",
+            f"    {outcome.surplus_path}",
+            "",
+            "Port them into the corpus with:",
+            "",
+            f"    icepick allocation mount --path {outcome.surplus_path} \\",
+            f"      --source {outcome.source_name}_surplus --provenance extracted \\",
+            f"      --output-dir <output_dir>",
+            "",
+        ]
     if outcome.acquisition:
         acq = outcome.acquisition
         budget = acq.get("call_budget")
@@ -817,7 +888,6 @@ def _write_report(outcome: ScrapeRunResult, result: NormaliseResult, *, created_
             "| --- | --- |",
             f"| arxiv_query | {acq.get('arxiv_queries', 0)} |",
             f"| latex_source_fetch | {acq.get('latex_fetches', 0)} |",
-            f"| qa_quality_gate (Haiku) | {acq.get('gate_calls', 0)} |",
             f"| qa_generation (Sonnet) | {acq.get('qa_calls', 0)} |",
             f"| total | {acq.get('total_calls', 0)}"
             + (f" / {budget} budgeted" if budget is not None else "") + " |",
@@ -834,6 +904,9 @@ def _write_report(outcome: ScrapeRunResult, result: NormaliseResult, *, created_
             status_text = ", ".join(f"{status}: {count}" for status, count in sorted(statuses.items()))
             lines += [
                 "## arXiv throttle telemetry",
+                "",
+                "Totals span the run's whole lifetime — every invocation of this",
+                "run_id, including any the limiter killed before a paper committed.",
                 "",
                 "| metric | value |",
                 "| --- | --- |",
@@ -861,9 +934,9 @@ def _write_report(outcome: ScrapeRunResult, result: NormaliseResult, *, created_
     lines += ["", "## Drops", ""]
     lines += [
         f"- candidate {item.get('candidate_index', '?')}: {item['reason']}"
-        for item in result.quarantined
+        for item in quarantined_rows
     ] or ["- none (nothing quarantined)"]
-    if result.quarantined:
+    if quarantined_rows:
         lines.append(f"- full quarantined rows: `{outcome.raw_dir / 'quarantined.jsonl'}`")
     lines += [
         "",
@@ -873,6 +946,10 @@ def _write_report(outcome: ScrapeRunResult, result: NormaliseResult, *, created_
         f"- manifest: `{outcome.manifest_path}`",
         f"- raw artifacts: `{outcome.raw_dir}`",
         f"- this report: `{outcome.report_path}`",
+    ]
+    if outcome.surplus_count:
+        lines.append(f"- surplus (mount-ready cap overflow): `{outcome.surplus_path}`")
+    lines += [
         "",
     ]
     outcome.report_path.parent.mkdir(parents=True, exist_ok=True)

@@ -148,6 +148,47 @@ def test_completed_production_rerun_is_idempotent_and_free(tmp_path, monkeypatch
     assert len(latex_fetches) == 2  # both fetched in run one, zero on the rerun
 
 
+def test_report_carries_throttle_telemetry_from_a_429_killed_first_invocation(tmp_path, monkeypatch):
+    """Run-lifetime telemetry, end to end: invocation one dies to arXiv's
+    limiter before committing a single paper (so it writes no report at
+    all); the cooled-down resume completes, and its source_report.md must
+    still show the throttling that killed invocation one."""
+    import gzip
+
+    def throttled(query, *, start, max_results):
+        # What a final-retry 429 does inside _http_get: notify the scrape's
+        # observers (durable telemetry + cooldown stamp), then die.
+        source._notify_rate_limit(429, 6.0)
+        raise OSError("429 Client Error: rate limited")
+
+    monkeypatch.setattr(source, "default_arxiv_fetcher", throttled)
+    with pytest.raises(OSError):
+        realmath_scrape.run(_manifest(tmp_path), now=NOW)
+    progress = _run_dir(tmp_path) / "_progress"
+    assert (progress / "rate_limit_events.jsonl").exists()
+    assert not (_run_dir(tmp_path) / "reports" / "source_report.md").exists()
+
+    # Resume after the cooldown: canned feed and e-prints, run completes.
+    monkeypatch.setenv("ICEPICK_ARXIV_COOLDOWN_SECONDS", "0")
+    monkeypatch.setattr(
+        source, "default_arxiv_fetcher",
+        lambda query, *, start, max_results: _FEED if start == 0 else _EMPTY,
+    )
+    monkeypatch.setattr(
+        source, "default_latex_source_fetcher",
+        lambda arxiv_id, **kw: gzip.compress(_tex_for(arxiv_id)),
+    )
+    outcome = realmath_scrape.run(_manifest(tmp_path), now=NOW)
+    assert outcome.interrupted is False
+    assert outcome.acquisition["rate_limit_events"] == 1
+    assert outcome.acquisition["rate_limit_backoff_seconds"] == pytest.approx(6.0)
+    assert outcome.acquisition["rate_limit_statuses"] == {"429": 1}
+    report = outcome.report_path.read_text()
+    assert "## arXiv throttle telemetry" in report
+    assert "| 429/503 encounters | 1 |" in report
+    assert "| total backoff seconds | 6.0 |" in report
+
+
 def test_flow_testing_replay_creates_no_progress_dir(tmp_path, fixtures_dir):
     manifest = _manifest(
         tmp_path, processor_mode="flow_testing",

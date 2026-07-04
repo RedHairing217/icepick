@@ -20,7 +20,7 @@ processing pipeline → groundtruth → poser               → final_corpus.jso
 `plan` and `approve` are the two-step human gate: planning never scrapes, and a
 production scrape only runs from a manifest a person approved with a call
 budget. The plan estimate is extraction-aware: `qa` budgets arXiv queries,
-e-print source fetches, Haiku gate calls, and Sonnet Q+A calls.
+e-print source fetches, and one Sonnet Q+A call per mined theorem.
 
 ## Prerequisites
 
@@ -72,6 +72,8 @@ icepick allocation plan --source-type realmath_scrape --source pde_2026Q2 \
 # --max-per-paper caps how many candidates one paper contributes: a
 # theorem-dense paper (60+ lemmas) would otherwise fill --target-count by
 # itself. Set it for a diverse corpus; omit it to take everything per paper.
+# Caps shape the handoff, they never reject: accepted rows past a cap land in
+# handoff/surplus_records.jsonl (canonical, mount-ready), counted in the report.
 
 # Approve WITH a call budget that covers the plan's estimated_calls.
 # (approve refuses production if --call-budget is missing or below the estimate.)
@@ -98,9 +100,11 @@ icepick processing pipeline --mode production \
 | `qa` | LLM-reformulated question | LLM-extracted, sympy-verified (number/tuple/expr) | **yes** |
 
 `qa` answers are the paper's *stated* result (extract-only prompt), so records
-stay `provenance=extracted` and survive the groundtruth stage. The repeated
-Anthropic system prompts are sent with ephemeral prompt caching enabled; when
-the SDK reports cache-read/create token counts, they appear in
+stay `provenance=extracted` and survive the groundtruth stage. The Sonnet system
+prompt carries an ephemeral `cache_control` block, but at ~480 tokens it sits
+below Anthropic's 2048-token minimum cacheable prefix, so caching is inert
+(cache reads stay 0) — the block is kept only so a future larger prompt would
+activate it for free. Reported token counts still appear in
 `reports/source_report.md`.
 
 ## Run outputs (`$OUT/runs/<run_id>/`)
@@ -108,6 +112,9 @@ the SDK reports cache-read/create token counts, they appear in
 ```
 manifest.json                 the approved manifest
 handoff/records.jsonl         ← the ONLY file processing consumes
+handoff/surplus_records.jsonl cap-overflow accepted rows, mount-ready (only
+                              when max-per-paper/target-count bit; the report's
+                              Surplus section carries the exact mount command)
 raw/papers.jsonl              unique paper pool
 raw/extracted_candidates.jsonl
 raw/qa_candidates.jsonl       raw scraper rows (audit)
@@ -117,8 +124,8 @@ _progress/                    checkpoint store (production scrapes)
   papers_done.jsonl           per-paper commits — the resume ledger
   candidates.jsonl            durable raw candidates
   qa_cache.jsonl              cached Sonnet Q+A answers
-  gate_cache.jsonl            cached Haiku gate verdicts
   rate_limited_at             last 429/503 timestamp while cooling down
+  rate_limit_events.jsonl     durable 429/503 log (at/status/backoff per event)
   INCOMPLETE                  present only while a run is unfinished
 ```
 
@@ -132,9 +139,8 @@ crash, or a network death **pauses** the run instead of killing it:
   pipeline never consumes the partial corpus.
 - **To resume, rerun the exact same command**:
   `icepick allocation run --manifest <same path>`. Papers already acquired
-  are served from `_progress/` (no refetch); cached gate verdicts and QA
-  answers are free (no re-billing). At most uncached work from the one
-  in-flight item is redone.
+  are served from `_progress/` (no refetch); cached QA answers are free
+  (no re-billing). At most uncached work from the one in-flight item is redone.
 - A completed run's rerun is idempotent: everything replays from the
   checkpoint, spending nothing.
 
@@ -146,6 +152,13 @@ that timestamp. A resume inside the cooldown window refuses to start and prints
 the retry time instead of immediately re-hitting arXiv. Tune the window with
 `ICEPICK_ARXIV_COOLDOWN_SECONDS` (default 1200; set `0` only for deliberate
 operator override).
+
+Every 429/503 is also appended to `_progress/rate_limit_events.jsonl` as it
+happens, so the throttle telemetry in the final `source_report.md` covers the
+run's **whole lifetime** — including an invocation the limiter killed before it
+committed a single paper (that invocation writes no report of its own). The
+first successful request clears only the cooldown marker; the event log stays
+as the audit trail.
 
 ## Alternative: bring your own records (manual mount)
 

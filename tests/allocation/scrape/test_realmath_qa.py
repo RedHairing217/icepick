@@ -129,17 +129,6 @@ def test_qa_extractor_skips_when_generator_raises():
     assert candidates == []
 
 
-def test_qa_extractor_fail_opens_when_gate_flakes():
-    def flaky_gate(statement):
-        raise RuntimeError("temporary gate outage")
-
-    candidates = source.qa_extractor(
-        _paper(), source_fetcher=_source_fetcher, quality_gate=flaky_gate,
-        generator=lambda s: {"question": "How many primes are below ten?", "answer": "4"},
-    )
-    assert candidates
-
-
 def test_qa_extractor_surfaces_config_errors_instead_of_skipping():
     """A missing key / SDK is systemic — it must not masquerade as 0 results."""
     def misconfigured(statement):
@@ -199,7 +188,6 @@ def test_scrape_with_qa_extraction_mode(monkeypatch):
 </feed>"""
     empty = '<feed xmlns="http://www.w3.org/2005/Atom"></feed>'
     monkeypatch.setattr(source, "default_latex_source_fetcher", lambda aid, timeout=30: _targz({"main.tex": _TEX}))
-    monkeypatch.setattr(source, "default_qa_quality_gate", lambda statement, **kw: True)
     monkeypatch.setattr(
         source, "default_qa_generator",
         lambda statement, **kw: {"question": "How many primes below ten?", "answer": "4"}
@@ -222,19 +210,17 @@ def test_default_qa_generator_requires_a_key(monkeypatch):
         source.default_qa_generator("some theorem")
 
 
-def test_default_qa_calls_use_prompt_cache_and_report_usage(monkeypatch):
+def test_default_qa_generator_sends_prompt_cache_and_reports_usage(monkeypatch):
     calls = []
-    responses = [
-        '{"accept": true}',
-        '{"question": "Q?", "answer": "42", "is_good_theorem": true}',
-    ]
 
     class _Messages:
         def create(self, **kwargs):
             calls.append(kwargs)
-            text = responses.pop(0)
             return types.SimpleNamespace(
-                content=[types.SimpleNamespace(type="text", text=text)],
+                content=[types.SimpleNamespace(
+                    type="text",
+                    text='{"question": "Q?", "answer": "42", "is_good_theorem": true}',
+                )],
                 usage=types.SimpleNamespace(
                     input_tokens=100,
                     output_tokens=10,
@@ -251,17 +237,13 @@ def test_default_qa_calls_use_prompt_cache_and_report_usage(monkeypatch):
     monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=_Client))
     usage_rows = []
 
-    assert source.default_qa_quality_gate("Theorem.", usage_callback=usage_rows.append) is True
     assert source.default_qa_generator("Theorem.", usage_callback=usage_rows.append)["answer"] == "42"
 
+    # The cache_control block is still sent (forward-compatible); at current
+    # prompt sizes it is inert — Anthropic's minimum cacheable prefix (2048
+    # tokens on Sonnet 4.6) sits above the ~480-token QA prompt, so cache
+    # reads stay 0. Kept so a future larger prompt activates it for free.
     assert calls[0]["system"] == [
-        {
-            "type": "text",
-            "text": source._QA_QUALITY_GATE_PROMPT,
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
-    assert calls[1]["system"] == [
         {
             "type": "text",
             "text": source._QA_SYSTEM_PROMPT,
@@ -269,12 +251,6 @@ def test_default_qa_calls_use_prompt_cache_and_report_usage(monkeypatch):
         }
     ]
     assert usage_rows == [
-        {
-            "input_tokens": 100,
-            "output_tokens": 10,
-            "cache_read_input_tokens": 80,
-            "cache_creation_input_tokens": 20,
-        },
         {
             "input_tokens": 100,
             "output_tokens": 10,

@@ -1335,6 +1335,7 @@ def _run_allocation_run(args) -> int:
             "duplicates_dropped": outcome.duplicates_dropped,
             "quarantined": outcome.quarantined_count,
             "handoff_records": outcome.record_count,
+            "surplus_records": getattr(outcome, "surplus_count", 0),
         },
         "spend": outcome.acquisition,  # acquisition call counts vs budget (production)
         "outputs": {
@@ -1342,6 +1343,10 @@ def _run_allocation_run(args) -> int:
             "manifest": str(outcome.manifest_path),
             "report": str(outcome.report_path),
             "raw_dir": str(outcome.raw_dir),
+            **(
+                {"surplus": str(outcome.surplus_path)}
+                if getattr(outcome, "surplus_path", None) else {}
+            ),
         },
         "warnings": outcome.warnings,
         "next": (
