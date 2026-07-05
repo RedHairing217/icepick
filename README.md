@@ -6,16 +6,15 @@ Icepick is the second repo in the ModelBreaker line. The original `ModelBreaker`
 repo holds the experiment history, dashboards, and source reports. Icepick is
 the **portable processing surface with in-house acquisition**: it scrapes and
 harvests its own source records (RealMath-style, behind the `allocation`
-subsystem), ingests them, filters by publication status, and runs the poser
-fleet as the final gate.
+subsystem), ingests them, and runs the poser fleet as the final gate.
 
 ## Pipeline
 
 ```
-ingest  →  groundtruth  →  poser (the gate)  →  final corpus
+ingest  →  poser (the gate)  →  final corpus
 ```
 
-Three working stages. No separate "gate" stage — **the poser fleet IS
+Two working stages. No separate "gate" stage — **the poser fleet IS
 the gate**. See `docs/plan.md` for what's deliberately out of scope, and
 [`docs/operator.md`](docs/operator.md) for the runbook (five-minute first
 run, stage-by-stage, troubleshooting, cost estimation).
@@ -24,18 +23,24 @@ To acquire records by scraping arXiv in-house (`plan → approve → run`), see
 [`docs/scraper_runbook.md`](docs/scraper_runbook.md).
 
 - **`ingest`** — load JSONL into normalised `ProblemRecord` (stable
-  `uid` content hash, provenance, derived label).
-- **`groundtruth`** — Anthropic web_search judge that verifies the
-  source arXiv paper is peer-reviewed AND indexed in a reputable
-  bibliographic database (Scopus, Web of Science, DBLP, MathSciNet,
-  PubMed, IEEE Xplore, ACM DL). Runs **before OR after pass@k** at the
-  user's choice. icepick does not process generated records — they're
-  discarded at this stage with an explicit reason.
+  `uid` content hash, provenance, derived label). icepick does not
+  process generated records — they're discarded with an explicit reason.
 - **`poser`** — well-posedness gate via a fleet of `(build, provider)`
   combos: `claude` or `codex` as the build, `anthropic` or `openai` as
   the judge backend (four legal combinations). Any subset runs in
   parallel; combine policies are `intersect` / `union` / `majority` /
   `prefer:<combo>`. Records that pass are the final corpus.
+
+**Removed — the `groundtruth` publication-status check.** Earlier
+revisions filtered records through an Anthropic web_search judge that
+required the source paper be peer-reviewed AND indexed in a reputable
+bibliographic database (Scopus, Web of Science, DBLP, MathSciNet, PubMed,
+IEEE Xplore, ACM DL). The check was removed from the pipeline because the
+corpus targets are primarily **pre-published arXiv preprints** —
+current-cycle submissions that are, by construction, not yet peer-reviewed
+or indexed anywhere — so the check would have rejected the corpus
+wholesale while spending on every lookup. The stage's code remains in the
+repo (kill-switched) for corpora where publication status is meaningful.
 
 ## What it explicitly is not
 
@@ -47,8 +52,8 @@ To acquire records by scraping arXiv in-house (`plan → approve → run`), see
 
 Three independent structures, each with its own CLI and tests:
 
-1. **processing/** — the three working stages (`ingest`, `groundtruth`,
-   `poser`). Runs without allocation. Runs without chat.
+1. **processing/** — the working stages (`ingest`, `poser`). Runs
+   without allocation. Runs without chat.
 2. **allocation/** — intake planning, manifest approval, budget estimates,
    acquisition adapters (in-house RealMath/arXiv scraper), manual mounts,
    handoff. Working: `mount`, `plan`, `approve`, `run` (see
@@ -100,12 +105,11 @@ icepick allocation mount \
     --column statement=question --column answer=gold --column arxiv_id=arxiv
 # → out/intake/runs/<ts>/handoff/records.jsonl  (+ manifest.json)
 
-# Pipeline: groundtruth → poser → final corpus
+# Pipeline: poser → final corpus
 icepick processing pipeline --mode production \
     --input out/intake/runs/<ts>/handoff/records.jsonl --output-dir out \
     --combo claude:anthropic \
-    --anthro-key-file ../anthro_key.env \
-    --gt-cache-path out/groundtruth/paper_cache.jsonl
+    --anthro-key-file ../anthro_key.env
 # → out/final_corpus.jsonl
 ```
 
@@ -124,17 +128,6 @@ icepick processing wellposed --combo all --mode production \
     --input out/passatk/records.jsonl --output-dir out/wellposed \
     --anthro-key-file ../anthro_key.env --openai-key-file ../openai_key.env \
     --comparison-policy majority
-
-# Groundtruth (publication-status check via Anthropic web_search).
-# Position is the user's choice — pass whichever JSONL is appropriate:
-#   BEFORE pass@k (cheapest, filters before sampling spend):
-icepick processing groundtruth --mode production \
-    --input out/intake/records.jsonl --output-dir out/groundtruth \
-    --anthro-key-file ../anthro_key.env --cache-path out/groundtruth/paper_cache.jsonl
-#   AFTER pass@k (filter survivors before the poser):
-icepick processing groundtruth --mode production \
-    --input out/passatk/records.jsonl --output-dir out/groundtruth \
-    --anthro-key-file ../anthro_key.env --cache-path out/groundtruth/paper_cache.jsonl
 ```
 
 All call-bearing commands require `--mode`. `flow_testing` mode
