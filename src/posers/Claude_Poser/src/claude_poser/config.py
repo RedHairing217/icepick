@@ -26,6 +26,11 @@ class WellposedConfig:
     enable_judge: bool = False
     judge_samples: int = 3
     judge_uphold: int = 2
+    # Fresh attempts for a sample whose live call came back 'error' (bad
+    # JSON, transient API fault) before the error vote stands. Error votes
+    # can never vote pass, so without retries they bias the corroboration
+    # toward defer — which downstream treats as a rejection.
+    judge_error_retries: int = 1
 
     # Provider selection — swap between API backends without code changes.
     judge_provider: str = "anthropic"
@@ -109,3 +114,5 @@ class WellposedConfig:
             raise ValueError("judge_samples must be >= 1")
         if not (1 <= self.judge_uphold <= self.judge_samples):
             raise ValueError("judge_uphold must satisfy 1 <= uphold <= samples")
+        if self.judge_error_retries < 0:
+            raise ValueError("judge_error_retries must be >= 0")

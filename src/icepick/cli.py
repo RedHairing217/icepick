@@ -255,7 +255,12 @@ def _build_processing(sub) -> None:
         default=",".join(DEFAULT_STAGES),
         help=(
             "Ordered, comma-separated combos. Default: "
-            f"{','.join(DEFAULT_STAGES)}. Each stage runs on the survivors of the previous."
+            f"{','.join(DEFAULT_STAGES)}. Each stage runs on the survivors of the previous. "
+            "Append '?advisory' to a combo to make that stage non-gating: it "
+            "records verdicts and writes its rejections to "
+            "flagged_for_review.jsonl, but every record flows on to the next "
+            "stage. (claude:openai defaults to advisory — see the 2026-07-04 "
+            "stage-3 kill analysis: 82.5%% false kills as a hard gate.)"
         ),
     )
     p.add_argument(
@@ -934,7 +939,7 @@ def _run_wellposed_cascade(args) -> int:
         "mode": cfg.mode,
         "input": args.input,
         "input_record_count": len(records),
-        "stages": [s.combo.key() for s in cfg.stages],
+        "stages": [s.spec_string() for s in cfg.stages],
         "overall_counts": outcome.overall_counts,
         "final_corpus": {
             "path": str(outcome.final_corpus_path),
@@ -948,10 +953,12 @@ def _run_wellposed_cascade(args) -> int:
             {
                 "index": s.stage.index,
                 "combo": s.stage.combo.key(),
+                "advisory": s.stage.advisory,
                 "counts": s.counts,
                 "survivor_uid_count": s.survivor_uid_count,
                 "wall_clock_seconds": s.wall_clock_seconds,
                 "wellposed_manifest": str(s.wellposed_manifest_path),
+                "flagged_for_review": str(s.flagged_for_review_path) if s.flagged_for_review_path else None,
                 "retry_events": s.retry_events,
             }
             for s in outcome.stages
@@ -1508,7 +1515,7 @@ def _parse_combos(combo_args):
 
 
 def _parse_stage_list(stages_arg: str):
-    """Turn ``'codex:openai,codex:anthropic,claude:openai'`` into StageSpecs."""
+    """Turn ``'codex:openai,codex:anthropic,claude:openai?advisory'`` into StageSpecs."""
     if not stages_arg or not stages_arg.strip():
         raise ValueError("--stages must not be empty")
     specs = [tok.strip() for tok in stages_arg.split(",") if tok.strip()]

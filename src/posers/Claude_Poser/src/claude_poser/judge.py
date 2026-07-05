@@ -8,19 +8,28 @@ Supports two API backends, selected by cfg.judge_provider:
                 that URL at the server's /v1 endpoint.
 
 Each judge sample returns:
-    {"verdict": "pass" | "flag", "insufficient_context": bool, "reason": str}
+    {"verdict": "pass" | "flag", "insufficient_context": bool, "reason": str,
+     "derived_answer": str | null}
 
 Corroboration rules:
 - A 'flag' is upheld only on a majority of samples.
 - 'insufficient_context' is upheld on a majority and short-circuits to a
   dedicated status downstream.
 - If the active provider is unreachable, samples come back as 'error' and
-  the corroborated result is 'defer'.
+  the corroborated result is 'defer'. ``defer_reason`` distinguishes a
+  quorum broken by sample errors ("judge_errors") from a genuine split
+  among substantive votes ("split") so downstream can retry the former
+  instead of silently discarding the record.
+- Live calls that come back 'error' (parse failure, transient API fault)
+  are retried up to cfg.judge_error_retries times before the error vote
+  stands. The stage-3 kill analysis (2026-07-04) found 8% of gpt-4.1-mini
+  samples were bad-JSON errors that converted to kills.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -55,10 +64,24 @@ JUDGE_SYSTEM = (
     "Set it to false when the statement is self-contained but ill-posed for "
     "other reasons (ambiguous, contradictory, underdetermined by choice of "
     "input rather than by missing definition).\n\n"
+    "When your verdict is \"pass\" and you can state the final answer "
+    "concisely, put it in derived_answer (a short expression or value, no "
+    "working). If stating it would need extensive computation you have not "
+    "done, or your verdict is \"flag\", set derived_answer to null. Do not "
+    "guess: only fill derived_answer when you are confident. This field is "
+    "audited against the record's stored answer — a pass whose derived "
+    "answer contradicts the stored answer is routed to human review.\n\n"
     "Respond with one JSON object only, no prose, matching:\n"
     '{"verdict": "pass" | "flag", "insufficient_context": true | false, '
-    '"reason": "<one short sentence>"}'
+    '"reason": "<one short sentence>", "derived_answer": "<answer>" | null}'
 )
+
+# Bump when the reply schema or system prompt changes meaningfully. The
+# marker rides in the user prompt because the judge cache keys on
+# (provider, model, prompt, sample_id) — NOT the system prompt — so a schema
+# change must roll the key or stale replies would be served under the new
+# schema. v2: added derived_answer (answer-consistency audit).
+PROMPT_VERSION = "v2"
 
 
 def build_prompt(statement: str) -> str:
@@ -67,7 +90,7 @@ def build_prompt(statement: str) -> str:
         "----\n"
         f"{statement}\n"
         "----\n"
-        "Reply with the JSON object only."
+        f"Reply with the JSON object only. (judge schema {PROMPT_VERSION})"
     )
 
 
@@ -77,6 +100,7 @@ class JudgeSample:
     verdict: str  # "pass" | "flag" | "error"
     insufficient_context: bool
     reason: str
+    derived_answer: Optional[str] = None  # judge's own answer when passing (schema v2)
     usage: Optional[dict] = None  # raw {input_tokens, output_tokens, ...} from the API
 
     def to_dict(self) -> dict:
@@ -85,6 +109,7 @@ class JudgeSample:
             "verdict": self.verdict,
             "insufficient_context": self.insufficient_context,
             "reason": self.reason,
+            "derived_answer": self.derived_answer,
             "usage": self.usage,
         }
 
@@ -99,6 +124,11 @@ class JudgeOutcome:
     error_votes: int
     provider: str
     model: str
+    # Only set when majority_verdict == "defer":
+    #   "judge_errors" — error votes broke the quorum (no side could reach
+    #                    uphold even with unanimity among parsed samples);
+    #   "split"        — substantive votes genuinely disagree.
+    defer_reason: Optional[str] = None
 
     def usage_total(self) -> dict:
         """Sum every sample's usage. Cache hits and errors contribute zero."""
@@ -127,6 +157,7 @@ class JudgeOutcome:
             "flag_votes": self.flag_votes,
             "insufficient_context_votes": self.ic_votes,
             "error_votes": self.error_votes,
+            "defer_reason": self.defer_reason,
             "samples": [s.to_dict() for s in self.samples],
             "usage": self.usage_total(),
         }
@@ -135,6 +166,14 @@ class JudgeOutcome:
 # --------------------------------------------------------------------------- #
 # Reply parsing
 # --------------------------------------------------------------------------- #
+
+
+# A backslash not opening a legal JSON escape — models judging LaTeX-heavy
+# statements routinely emit raw TeX macros ("\alpha", "\mathcal{L}") inside
+# JSON strings, which json.loads rejects as "Invalid \escape". Doubling the
+# offending backslash preserves the intended text and is a no-op on valid
+# JSON (the pattern cannot match inside a legal escape).
+_BAD_JSON_ESCAPE = re.compile(r'\\(?![\\"/bfnrtu])')
 
 
 def _parse_reply(text: str) -> dict:
@@ -148,17 +187,24 @@ def _parse_reply(text: str) -> dict:
     a, b = text.find("{"), text.rfind("}")
     if a == -1 or b == -1 or b <= a:
         return {"verdict": "error", "insufficient_context": False, "reason": "no JSON"}
+    candidate = text[a : b + 1]
     try:
-        obj = json.loads(text[a : b + 1])
-    except json.JSONDecodeError as e:
-        return {"verdict": "error", "insufficient_context": False, "reason": f"bad JSON: {e}"}
+        obj = json.loads(candidate)
+    except json.JSONDecodeError as first_err:
+        try:
+            obj = json.loads(_BAD_JSON_ESCAPE.sub(r"\\\\", candidate))
+        except json.JSONDecodeError:
+            return {"verdict": "error", "insufficient_context": False,
+                    "reason": f"bad JSON: {first_err}"}
     verdict = str(obj.get("verdict", "")).lower()
     if verdict not in ("pass", "flag"):
         verdict = "error"
+    derived = obj.get("derived_answer")
     return {
         "verdict": verdict,
         "insufficient_context": bool(obj.get("insufficient_context", False)),
         "reason": str(obj.get("reason", "")),
+        "derived_answer": str(derived) if derived not in (None, "") else None,
     }
 
 
@@ -322,8 +368,15 @@ def _corroborate(
     else:
         majority = "defer"
 
-    if error_votes > n - uphold:
+    # Quorum broken by errors: even unanimity among the parsed samples could
+    # not reach uphold. Overrides any accidental majority among the rest.
+    quorum_broken = error_votes > n - uphold
+    if quorum_broken:
         majority = "defer"
+
+    defer_reason: Optional[str] = None
+    if majority == "defer":
+        defer_reason = "judge_errors" if quorum_broken else "split"
 
     return JudgeOutcome(
         samples=samples,
@@ -334,6 +387,7 @@ def _corroborate(
         error_votes=error_votes,
         provider=provider,
         model=model,
+        defer_reason=defer_reason,
     )
 
 
@@ -363,6 +417,13 @@ def judge_wellposed(
                 reply = cached["reply"]
         if reply is None:
             reply = dispatched(cfg, prompt)
+            # Error replies (parse failure, transient API fault) get a bounded
+            # number of fresh attempts before the error vote stands — a single
+            # unlucky sample must not decide the record's fate.
+            for _ in range(cfg.judge_error_retries):
+                if reply.get("verdict") != "error":
+                    break
+                reply = dispatched(cfg, prompt)
             if cache is not None and reply.get("verdict") != "error":
                 cache.put(provider, model, prompt, sample_id, reply)
         samples.append(
@@ -371,6 +432,7 @@ def judge_wellposed(
                 verdict=reply.get("verdict", "error"),
                 insufficient_context=bool(reply.get("insufficient_context", False)),
                 reason=str(reply.get("reason", "")),
+                derived_answer=reply.get("derived_answer") or None,
                 usage=reply.get("usage") or None,
             )
         )

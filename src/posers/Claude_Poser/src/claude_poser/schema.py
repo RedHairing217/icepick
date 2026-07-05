@@ -45,6 +45,10 @@ def normalise_record(row: dict, rid: int) -> dict:
         "statement": statement,
         "provenance": provenance,
         "truth_policy": truth_policy,
+        # Stored ground-truth answer, when the input carries one. Feeds the
+        # degeneracy scan (answer-in-statement) and the judge answer-
+        # consistency audit; both are review signals, not gates.
+        "answer": row.get("answer"),
         "family": row.get("family"),
         "tier": row.get("tier"),
         "pass_at_k": row.get("pass_at_k"),

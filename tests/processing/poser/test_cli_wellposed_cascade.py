@@ -123,7 +123,9 @@ def test_cli_cascade_end_to_end_writes_manifest_and_final_corpus(tmp_path, monke
     out = capsys.readouterr().out
     summary = json.loads(out)
     assert summary["final_corpus"]["record_count"] == 1
-    assert summary["stages"] == ["codex:openai", "codex:anthropic", "claude:openai"]
+    # claude:openai runs advisory by default since the 2026-07-04 stage-3
+    # kill analysis (82.5% false kills as a hard gate).
+    assert summary["stages"] == ["codex:openai", "codex:anthropic", "claude:openai?advisory"]
 
 
 def test_cli_cascade_default_stages_match_recommended_order(tmp_path, monkeypatch, capsys):
@@ -143,6 +145,7 @@ def test_cli_cascade_default_stages_match_recommended_order(tmp_path, monkeypatc
     assert [s["combo"] for s in manifest["config"]["stages"]] == [
         "codex:openai", "codex:anthropic", "claude:openai",
     ]
+    assert [s["advisory"] for s in manifest["config"]["stages"]] == [False, False, True]
 
 
 def test_cli_cascade_bad_stage_token_fails(tmp_path, monkeypatch):

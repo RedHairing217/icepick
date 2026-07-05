@@ -49,7 +49,8 @@ def test_openai_caller_returns_parsed_pass(monkeypatch):
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     reply = _call_openai_once(cfg, "test prompt")
-    assert reply == {"verdict": "pass", "insufficient_context": False, "reason": "ok"}
+    assert reply == {"verdict": "pass", "insufficient_context": False, "reason": "ok",
+                     "derived_answer": None}
     assert captured["url"].endswith("/chat/completions")
     assert captured["headers"]["Authorization"] == "Bearer sk-test"
     assert captured["body"]["model"] == "gpt-4o-mini"  # default for openai

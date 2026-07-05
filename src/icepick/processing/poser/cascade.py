@@ -51,18 +51,33 @@ from icepick.processing.poser.runner import run as run_wellposed
 #
 # codex:openai first (cheapest, most permissive) sheds the majority of
 # ill-posed records; codex:anthropic then applies the strict formalist
-# check; claude:openai provides a semantic sanity pass. Records that all
-# three admit form the 3-way unanimous well_posed corpus. Operators can
-# override via ``--stages``.
-DEFAULT_STAGES: tuple = ("codex:openai", "codex:anthropic", "claude:openai")
+# check; claude:openai runs ADVISORY — its rejections are routed to
+# flagged_for_review.jsonl instead of killing records. The stage-3 kill
+# analysis (2026-07-04, out/wellposed_pde625_claude_anthropic/
+# stage3_kill_analysis.md) measured 33/40 (82.5%) false kills when this
+# stage acted as a hard gate: its judge flags any specialist notation it
+# does not recognise as 'insufficient context'. Its signal is still worth
+# keeping — the same run surfaced all 6 records the other judges wrongly
+# passed — hence advisory, not removed. Operators can override via
+# ``--stages`` (append '?advisory' to any combo).
+DEFAULT_STAGES: tuple = ("codex:openai", "codex:anthropic", "claude:openai?advisory")
+
+_ADVISORY_SUFFIX = "?advisory"
 
 
 @dataclass(frozen=True)
 class StageSpec:
-    """One position in the cascade — the ordinal and the combo to run."""
+    """One position in the cascade — the ordinal and the combo to run.
+
+    ``advisory`` stages run and record verdicts like any other, but do not
+    filter: every input record flows to the next stage, and the records the
+    stage would have rejected are written to ``flagged_for_review.jsonl``
+    in the stage subdir for human triage.
+    """
 
     index: int  # 1-based, for manifest + subdir naming
     combo: Combo
+    advisory: bool = False
 
     @property
     def label(self) -> str:
@@ -72,11 +87,27 @@ class StageSpec:
     def subdir_name(self) -> str:
         return f"stage_{self.index}_{self.combo.slug()}"
 
+    def spec_string(self) -> str:
+        """Round-trip form: 'build:provider' plus '?advisory' when set."""
+        return self.combo.key() + (_ADVISORY_SUFFIX if self.advisory else "")
+
+
+def _parse_stage_spec(index: int, spec: str) -> StageSpec:
+    body = spec.strip()
+    advisory = False
+    if "?" in body:
+        body, _, suffix = body.partition("?")
+        if suffix.strip().lower() != "advisory":
+            raise ConfigError(
+                f"stage {spec!r}: unknown suffix {suffix!r} (only '?advisory' is supported)"
+            )
+        advisory = True
+    return StageSpec(index=index, combo=parse_combo(body), advisory=advisory)
+
 
 def parse_stages(specs: List[str]) -> List[StageSpec]:
-    """Turn ordered 'build:provider' strings into StageSpecs (1-indexed)."""
-    return [StageSpec(index=i, combo=parse_combo(spec))
-            for i, spec in enumerate(specs, start=1)]
+    """Turn ordered 'build:provider[?advisory]' strings into StageSpecs (1-indexed)."""
+    return [_parse_stage_spec(i, spec) for i, spec in enumerate(specs, start=1)]
 
 
 @dataclass
@@ -173,7 +204,8 @@ class CascadeConfig:
     def echo(self) -> dict:
         return {
             "stages": [
-                {"index": s.index, "combo": s.combo.key(), "slug": s.combo.slug()}
+                {"index": s.index, "combo": s.combo.key(), "slug": s.combo.slug(),
+                 "advisory": s.advisory}
                 for s in self.stages
             ],
             "mode": self.mode,
@@ -219,6 +251,8 @@ class CascadeStageOutcome:
     token_usage: dict
     estimated_cost_usd: Optional[float]
     retry_events: List[dict] = field(default_factory=list)
+    # Advisory stages only: records the stage would have rejected.
+    flagged_for_review_path: Optional[Path] = None
 
 
 @dataclass
@@ -435,15 +469,41 @@ def _run_stage_with_retries(
             if v.verdict_status == STATUS_WELL_POSED:
                 passing_uids.add(uid)
 
+    # Advisory stages do not filter: every input record survives, and the
+    # ones the stage would have rejected land in flagged_for_review.jsonl
+    # (record + the stage's verdict) for human triage.
     stage_passed_path = stage_subdir / "passed_records.jsonl"
-    with stage_passed_path.open("w", encoding="utf-8") as fh:
-        for record in records:
-            if record.get("uid") in passing_uids:
+    flagged_path: Optional[Path] = None
+    if stage.advisory:
+        with stage_passed_path.open("w", encoding="utf-8") as fh:
+            for record in records:
                 fh.write(json.dumps(record) + "\n")
+        flagged_path = stage_subdir / "flagged_for_review.jsonl"
+        with flagged_path.open("w", encoding="utf-8") as fh:
+            for record in records:
+                uid = record.get("uid")
+                if uid in passing_uids:
+                    continue
+                v = all_verdicts.get(uid)
+                fh.write(json.dumps({
+                    "uid": uid,
+                    "advisory_stage": stage.spec_string(),
+                    "verdict_status": v.verdict_status if v else None,
+                    "verdict_detail": v.verdict_detail if v else {},
+                    "record": record,
+                }) + "\n")
+    else:
+        with stage_passed_path.open("w", encoding="utf-8") as fh:
+            for record in records:
+                if record.get("uid") in passing_uids:
+                    fh.write(json.dumps(record) + "\n")
 
     counts: dict = {}
     for v in all_verdicts.values():
         counts[v.verdict_status] = counts.get(v.verdict_status, 0) + 1
+    if stage.advisory:
+        counts["advisory_admitted"] = len(passing_uids)
+        counts["advisory_flagged"] = len(records) - len(passing_uids)
 
     token_usage = _sum_token_usage(attempt_token_usages)
     stage_cost = _sum_estimated_cost(cfg, token_usage)
@@ -454,12 +514,13 @@ def _run_stage_with_retries(
         normalised_path=stage_normalised_path,
         passed_records_path=stage_passed_path,
         input_uid_count=len(records),
-        survivor_uid_count=len(passing_uids),
+        survivor_uid_count=len(records) if stage.advisory else len(passing_uids),
         counts=counts,
         wall_clock_seconds=0.0,
         token_usage=token_usage,
         estimated_cost_usd=stage_cost,
         retry_events=retry_events,
+        flagged_for_review_path=flagged_path,
     )
 
 
@@ -530,6 +591,7 @@ def _stage_manifest_entry(so: CascadeStageOutcome) -> dict:
         "index": so.stage.index,
         "combo": so.stage.combo.key(),
         "slug": so.stage.combo.slug(),
+        "advisory": so.stage.advisory,
         "input_uid_count": so.input_uid_count,
         "survivor_uid_count": so.survivor_uid_count,
         "counts": so.counts,
@@ -537,6 +599,7 @@ def _stage_manifest_entry(so: CascadeStageOutcome) -> dict:
         "wellposed_manifest_path": str(so.wellposed_manifest_path),
         "normalised_path": str(so.normalised_path),
         "passed_records_path": str(so.passed_records_path),
+        "flagged_for_review_path": str(so.flagged_for_review_path) if so.flagged_for_review_path else None,
         "token_usage": so.token_usage,
         "estimated_cost_usd": so.estimated_cost_usd,
         "retry_events": so.retry_events,

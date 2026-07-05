@@ -269,3 +269,51 @@ def test_plan_writes_per_combo_filenames_so_fleet_does_not_collide(tmp_path):
     assert a.output_path != b.output_path
     assert a.input_path != b.input_path
     assert a.cache_path != b.cache_path
+
+
+def test_claude_defer_from_judge_errors_maps_to_error_for_retry(tmp_path):
+    """A defer whose quorum was broken by judge sample errors is an
+    infrastructure failure — normalise it to STATUS_ERROR so the cascade's
+    per-uid retry machinery re-runs it (2026-07-04 stage-3 kill analysis:
+    4/40 kills were parse-error artifacts)."""
+    payload = {
+        "judge_model": "gpt-4.1-mini",
+        "records": [
+            {"uid": "u1", "source": "s", "wellposed_status": "defer", "wellposed_score": 0.5,
+             "judge": {"defer_reason": "judge_errors", "error_votes": 2}},
+            {"uid": "u2", "source": "s", "wellposed_status": "defer", "wellposed_score": 0.5,
+             "judge": {"defer_reason": "split", "error_votes": 1}},
+            {"uid": "u3", "source": "s", "wellposed_status": "defer", "wellposed_score": 0.5},
+        ],
+    }
+    out = _write_json(tmp_path / "claude.json", payload)
+    combo = _combo(BUILD_CLAUDE, PROVIDER_OPENAI)
+    verdicts = ClaudePoserAdapter().normalise(out, input_uids=["u1", "u2", "u3"], combo=combo)
+    by_uid = {v.uid: v for v in verdicts}
+    assert by_uid["u1"].verdict_status == STATUS_ERROR
+    assert by_uid["u1"].verdict_detail["error_reason"] == "judge quorum broken by sample errors"
+    assert by_uid["u1"].verdict_detail["original_status"] == "defer"
+    # A genuine split stays defer — that is a verdict, not a fault.
+    assert by_uid["u2"].verdict_status == STATUS_DEFER
+    assert by_uid["u2"].verdict_detail["defer_reason"] == "split"
+    # Legacy rows without defer_reason keep the old behaviour.
+    assert by_uid["u3"].verdict_status == STATUS_DEFER
+
+
+def test_claude_surfaces_review_flags_and_answer_consistency(tmp_path):
+    payload = {
+        "judge_model": "claude-sonnet-4-6",
+        "records": [
+            {"uid": "u1", "source": "s", "wellposed_status": "pass", "wellposed_score": 1.0,
+             "review_flags": ["answer_mismatch", "degenerate_candidate"],
+             "judge": {"answer_consistency": "mismatch", "usage": {"input_tokens": 10}}},
+        ],
+    }
+    out = _write_json(tmp_path / "claude.json", payload)
+    combo = _combo(BUILD_CLAUDE, PROVIDER_ANTHROPIC)
+    verdicts = ClaudePoserAdapter().normalise(out, input_uids=["u1"], combo=combo)
+    v = verdicts[0]
+    assert v.verdict_status == STATUS_WELL_POSED
+    assert v.verdict_detail["review_flags"] == ["answer_mismatch", "degenerate_candidate"]
+    assert v.verdict_detail["answer_consistency"] == "mismatch"
+    assert v.verdict_signals["usage"] == {"input_tokens": 10}

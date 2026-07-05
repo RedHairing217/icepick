@@ -25,11 +25,13 @@ CSV_COLUMNS = (
     "wellposed_status",
     "wellposed_score",
     "judge_majority",
+    "defer_reason",
     "wellposed_votes",
     "flag_votes",
     "insufficient_context_votes",
     "error_votes",
     "code_hit_count",
+    "review_flags",
 )
 
 
@@ -44,11 +46,13 @@ def _flatten(result: dict) -> dict:
         "wellposed_status": result.get("wellposed_status"),
         "wellposed_score": result.get("wellposed_score"),
         "judge_majority": judge.get("majority_verdict"),
+        "defer_reason": judge.get("defer_reason"),
         "wellposed_votes": judge.get("wellposed_votes"),
         "flag_votes": judge.get("flag_votes"),
         "insufficient_context_votes": judge.get("insufficient_context_votes"),
         "error_votes": judge.get("error_votes"),
         "code_hit_count": len(result.get("code_hits") or []),
+        "review_flags": ";".join(result.get("review_flags") or []),
     }
 
 
@@ -58,8 +62,11 @@ def _run_meta(
     results: Sequence[dict],
 ) -> dict:
     counts: dict[str, int] = {}
+    review_flag_counts: dict[str, int] = {}
     for r in results:
         counts[r["wellposed_status"]] = counts.get(r["wellposed_status"], 0) + 1
+        for flag in r.get("review_flags") or []:
+            review_flag_counts[flag] = review_flag_counts.get(flag, 0) + 1
     return {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "module": "claude_poser",
@@ -70,6 +77,7 @@ def _run_meta(
         "inputs": list(inputs),
         "input_count": len(results),
         "counts": counts,
+        "review_flag_counts": review_flag_counts,
         "parameters": cfg.echo(),
     }
 

@@ -193,6 +193,27 @@ def _normalise_row(row: dict, model: str, combo: Combo) -> PoserVerdict:
     detail: dict = {"original_status": raw_status, "provider": combo.provider}
     if "tier" in row:
         detail["tier"] = row["tier"]
+
+    judge_block = row.get("judge") or {}
+    if not isinstance(judge_block, dict):
+        judge_block = {}
+
+    # A defer whose quorum was broken by judge sample errors (bad JSON,
+    # transient API fault) is an infrastructure failure, not a verdict.
+    # Map it to STATUS_ERROR so the cascade's per-uid retry machinery
+    # re-runs it instead of silently discarding the record. The stage-3
+    # kill analysis (2026-07-04) found 4 of 40 kills were exactly this.
+    if status == STATUS_DEFER and judge_block.get("defer_reason") == "judge_errors":
+        status = STATUS_ERROR
+        detail["error_reason"] = "judge quorum broken by sample errors"
+
+    if judge_block.get("defer_reason"):
+        detail["defer_reason"] = judge_block["defer_reason"]
+    if judge_block.get("answer_consistency"):
+        detail["answer_consistency"] = judge_block["answer_consistency"]
+    if row.get("review_flags"):
+        detail["review_flags"] = list(row["review_flags"])
+
     signals = {
         k: row[k]
         for k in ("wellposed_votes", "flag_votes", "insufficient_context_votes",
@@ -200,8 +221,7 @@ def _normalise_row(row: dict, model: str, combo: Combo) -> PoserVerdict:
         if k in row
     }
     # Token usage lives under judge.usage (set by Claude_Poser per record).
-    judge_block = row.get("judge") or {}
-    usage = judge_block.get("usage") if isinstance(judge_block, dict) else None
+    usage = judge_block.get("usage")
     if usage:
         signals["usage"] = usage
     return PoserVerdict(

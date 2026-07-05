@@ -548,3 +548,98 @@ def test_cascade_uid_injection_stable_across_stages(tmp_path):
     for stage_outcome in outcome.stages:
         rows = [json.loads(l) for l in stage_outcome.normalised_path.read_text().splitlines() if l.strip()]
         assert [r["uid"] for r in rows] == [expected_uid]
+
+
+# --- advisory stages (2026-07-04 stage-3 kill analysis) -------------------
+
+
+def test_parse_stages_advisory_suffix():
+    stages = parse_stages(["codex:openai", "claude:openai?advisory"])
+    assert stages[0].advisory is False
+    assert stages[1].advisory is True
+    assert stages[1].combo.key() == "claude:openai"
+    assert stages[1].spec_string() == "claude:openai?advisory"
+    assert stages[1].subdir_name == "stage_2_claude_openai"
+
+
+def test_parse_stages_unknown_suffix_rejected():
+    with pytest.raises(ConfigError):
+        parse_stages(["claude:openai?strict"])
+
+
+def test_default_stages_make_claude_openai_advisory():
+    from icepick.processing.poser.cascade import DEFAULT_STAGES
+
+    stages = parse_stages(list(DEFAULT_STAGES))
+    by_key = {s.combo.key(): s for s in stages}
+    assert by_key["claude:openai"].advisory is True
+    assert by_key["codex:openai"].advisory is False
+    assert by_key["codex:anthropic"].advisory is False
+
+
+def test_advisory_stage_does_not_filter_and_writes_review_file(tmp_path):
+    """Advisory claude:openai rejects uid_mid, but uid_mid still reaches the
+    final corpus; the rejection lands in flagged_for_review.jsonl."""
+    stages = parse_stages(["codex:openai", "claude:openai?advisory"])
+    cfg = CascadeConfig(
+        stages=stages, mode="production", enable_judge_tier=False,
+        output_dir=tmp_path, max_retries=0,
+    )
+    verdicts_codex = {
+        ("codex:openai", "uid_good"): [_wp("uid_good", STATUS_WELL_POSED, "codex:openai")],
+        ("codex:openai", "uid_mid"):  [_wp("uid_mid",  STATUS_WELL_POSED, "codex:openai")],
+        ("codex:openai", "uid_bad"):  [_wp("uid_bad",  STATUS_ILL_POSED, "codex:openai")],
+    }
+    verdicts_claude = {
+        ("claude:openai", "uid_good"): [_wp("uid_good", STATUS_WELL_POSED, "claude:openai")],
+        ("claude:openai", "uid_mid"):  [_wp("uid_mid",  STATUS_ILL_POSED, "claude:openai")],
+    }
+    codex = _RoutingFakeAdapter(BUILD_CODEX, verdicts_codex)
+    claude = _RoutingFakeAdapter(BUILD_CLAUDE, verdicts_claude)
+    outcome = run_cascade(
+        cfg=cfg,
+        records=_records(),
+        adapter_overrides={BUILD_CODEX: codex, BUILD_CLAUDE: claude},
+    )
+
+    final = [json.loads(l) for l in outcome.final_corpus_path.read_text().splitlines() if l.strip()]
+    assert [r["uid"] for r in final] == ["uid_good", "uid_mid"]
+    assert outcome.overall_counts["after_stage_1"] == 2
+    assert outcome.overall_counts["after_stage_2"] == 2  # advisory: no attrition
+
+    advisory = outcome.stages[1]
+    assert advisory.stage.advisory is True
+    assert advisory.survivor_uid_count == 2
+    assert advisory.counts["advisory_admitted"] == 1
+    assert advisory.counts["advisory_flagged"] == 1
+    assert advisory.flagged_for_review_path is not None
+    flagged = [json.loads(l) for l in advisory.flagged_for_review_path.read_text().splitlines() if l.strip()]
+    assert [f["uid"] for f in flagged] == ["uid_mid"]
+    assert flagged[0]["verdict_status"] == STATUS_ILL_POSED
+    assert flagged[0]["advisory_stage"] == "claude:openai?advisory"
+    assert flagged[0]["record"]["uid"] == "uid_mid"
+
+    # Manifest reflects the advisory stage.
+    manifest = json.loads(outcome.manifest_path.read_text())
+    entry = manifest["stages"][1]
+    assert entry["advisory"] is True
+    assert entry["flagged_for_review_path"].endswith("flagged_for_review.jsonl")
+    assert manifest["stages"][0]["advisory"] is False
+    assert manifest["stages"][0]["flagged_for_review_path"] is None
+
+
+def test_gating_stage_has_no_review_file(tmp_path):
+    stages = parse_stages(["codex:openai"])
+    cfg = CascadeConfig(
+        stages=stages, mode="production", enable_judge_tier=False,
+        output_dir=tmp_path, max_retries=0,
+    )
+    verdicts_codex = {
+        ("codex:openai", "uid_good"): [_wp("uid_good", STATUS_WELL_POSED, "codex:openai")],
+        ("codex:openai", "uid_mid"):  [_wp("uid_mid",  STATUS_ILL_POSED, "codex:openai")],
+        ("codex:openai", "uid_bad"):  [_wp("uid_bad",  STATUS_ILL_POSED, "codex:openai")],
+    }
+    codex = _RoutingFakeAdapter(BUILD_CODEX, verdicts_codex)
+    outcome = run_cascade(cfg=cfg, records=_records(), adapter_overrides={BUILD_CODEX: codex})
+    assert outcome.stages[0].flagged_for_review_path is None
+    assert outcome.final_corpus_count == 1
