@@ -66,6 +66,19 @@ Findings that close old targets:
   Padding to the threshold is net-negative (arithmetic checked). The block is
   still sent (forward-compatible — a future larger prompt activates it free),
   but it saves nothing today. Any "caching savings" in a cost model is phantom.
+- **Judge-side caching is a measured no too (2026-07-05).** Across ~2,900
+  billed judge samples (620-rec wellposed claude:anthropic + both 2026-07-04
+  cascade runs) the largest full judge request is 912 tok, median ~550 —
+  under half the Sonnet 2048 minimum and below OpenAI's 1024-tok
+  automatic-caching floor, so caching is unreachable at every judge call
+  site, even within-record where the 3 sequential samples share the whole
+  prompt. Static prefixes (exact, free count_tokens): claude-poser
+  JUDGE_SYSTEM 478 tok, codex-poser rubric header 91 tok. Padding only beats
+  unpadded above ~990 tok/request; zero observed samples qualify. Achievable
+  saving: $0.00/batch of the theoretical $2.9 input-side ceiling. Both prompt
+  families are already static-first, so the OpenAI side has nothing to
+  reorder. Revisit only if statements grow ~4x, judge models change, or
+  Anthropic lowers the minimum.
 
 Open targets:
 - **T2.3 Empirical planning ratios**: recalibrate `PAPERS_PER_RECORD=4`,

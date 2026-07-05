@@ -513,6 +513,7 @@ Run full suite: `pytest` (~420 tests, ~1s). Live tests skipped by default.
 - **`pipeline` command does not include the scraper** — scrape output is fed to `pipeline` via `--input`. Two separate operator steps.
 - **Band constant mismatch with MB**: icepick `[0.125, 0.75]` vs MB `[0.125, 0.875]`. Documented in `pass_at_k/config.py`.
 - **QA prompt caching is inert**: the ~480-token QA prompt is below Anthropic's 2048-token minimum cacheable prefix, so `cache_control` reads 0. The block is sent anyway (forward-compatible).
+- **Judge prompt caching is inert too (measured 2026-07-05)**: across ~2,900 billed judge samples (wellposed claude:anthropic + both cascade runs) the largest full judge request is 912 tok — below the Sonnet 2048 minimum and OpenAI's 1024-tok automatic floor — so no judge call at any site can cache, even within-record. Static prefixes: claude-poser system 478 tok, codex-poser rubric 91 tok. Achievable saving $0.00/batch; padding is net-negative for every observed prompt size. See CLAUDE.md "Findings that close old targets".
 
 ---
 
