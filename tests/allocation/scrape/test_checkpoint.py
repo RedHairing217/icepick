@@ -142,6 +142,44 @@ def test_rate_limit_marker_blocks_only_during_cooldown(tmp_path, monkeypatch):
     checkpoint.enforce_rate_limit_cooldown(now=now)
 
 
+def test_rate_limit_telemetry_accumulates_across_instances(tmp_path):
+    first = ScrapeCheckpoint(tmp_path / "_progress")
+    first.record_rate_limit(429, 3.0)
+    first.record_rate_limit(429, 6.0)
+
+    # A new instance (a resumed invocation) merges the prior events and
+    # keeps counting — the totals cover the run's whole lifetime.
+    second = ScrapeCheckpoint(tmp_path / "_progress")
+    second.record_rate_limit(503, 1.5)
+    assert second.rate_limit_telemetry() == {
+        "events": 3,
+        "backoff_seconds": pytest.approx(10.5),
+        "statuses": {"429": 2, "503": 1},
+    }
+
+
+def test_clearing_the_cooldown_marker_keeps_the_telemetry_log(tmp_path):
+    checkpoint = ScrapeCheckpoint(tmp_path / "_progress")
+    checkpoint.record_rate_limit(429, 3.0)
+    checkpoint.stamp_rate_limited()
+    checkpoint.clear_rate_limit()  # the next successful request drops the marker...
+    assert not (tmp_path / "_progress" / "rate_limited_at").exists()
+    # ...but the event log is history, not transient cooldown state.
+    assert ScrapeCheckpoint(tmp_path / "_progress").rate_limit_telemetry()["events"] == 1
+
+
+def test_torn_rate_limit_event_line_is_skipped_not_fatal(tmp_path):
+    checkpoint = ScrapeCheckpoint(tmp_path / "_progress")
+    checkpoint.record_rate_limit(429, 3.0)
+    with (tmp_path / "_progress" / "rate_limit_events.jsonl").open("a") as fh:
+        fh.write('{"at": "2026-07-04T07:12:51Z", "status": 503, "backoff_')
+    assert ScrapeCheckpoint(tmp_path / "_progress").rate_limit_telemetry() == {
+        "events": 1,
+        "backoff_seconds": pytest.approx(3.0),
+        "statuses": {"429": 1},
+    }
+
+
 def test_torn_final_line_is_skipped_not_fatal(tmp_path):
     checkpoint = ScrapeCheckpoint(tmp_path / "_progress")
     checkpoint.commit("2604.00001", [{"statement": "s1"}])

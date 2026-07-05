@@ -7,12 +7,13 @@ acquired is refetched, and cached QA answers are never re-billed.
 
 Layout under ``<run_dir>/_progress/``::
 
-    papers_done.jsonl    one line per completed paper: arxiv_id + counts
-    candidates.jsonl     append-only raw candidate rows, keyed by arxiv_id
-    qa_cache.jsonl       one line per QA-generation call: statement hash -> result
-    gate_cache.jsonl     one line per QA-gate call: statement hash -> bool
-    rate_limited_at      ISO timestamp of the last 429/503 throttle response
-    INCOMPLETE           marker; present while a run is unfinished
+    papers_done.jsonl        one line per completed paper: arxiv_id + counts
+    candidates.jsonl         append-only raw candidate rows, keyed by arxiv_id
+    qa_cache.jsonl           one line per QA-generation call: statement hash -> result
+    gate_cache.jsonl         one line per QA-gate call: statement hash -> bool
+    rate_limited_at          ISO timestamp of the last 429/503 throttle response
+    rate_limit_events.jsonl  one line per 429/503: timestamp, status, backoff slept
+    INCOMPLETE               marker; present while a run is unfinished
 
 Every write is append + flush, committed per paper (and per LLM call), so
 a kill loses at most the in-flight item. The files double as an audit
@@ -29,6 +30,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 _RATE_LIMIT_MARKER = "rate_limited_at"
+_RATE_LIMIT_EVENTS = "rate_limit_events.jsonl"
 _DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 20 * 60
 
 
@@ -47,6 +49,7 @@ class ScrapeCheckpoint:
         self._qa_cache_path = self.progress_dir / "qa_cache.jsonl"
         self._gate_cache_path = self.progress_dir / "gate_cache.jsonl"
         self._rate_limit_path = self.progress_dir / _RATE_LIMIT_MARKER
+        self._rate_limit_events_path = self.progress_dir / _RATE_LIMIT_EVENTS
         self._incomplete_path = self.progress_dir / "INCOMPLETE"
 
         self.resuming = self._incomplete_path.exists()
@@ -54,6 +57,7 @@ class ScrapeCheckpoint:
         self._candidates_by_paper: dict = {}
         self._qa_cache: dict = {}
         self._gate_cache: dict = {}
+        self._rate_limit_telemetry: dict = {"events": 0, "backoff_seconds": 0.0, "statuses": {}}
         self._load()
         self.resumed_papers = len(self._done)
 
@@ -99,6 +103,33 @@ class ScrapeCheckpoint:
     def clear_rate_limit(self) -> None:
         """A successful arXiv request proves the cooldown marker is stale."""
         self._rate_limit_path.unlink(missing_ok=True)
+
+    def record_rate_limit(self, status, sleep_seconds, *, now: Optional[datetime] = None) -> None:
+        """Durably log one 429/503 throttle event, as it happens.
+
+        The cooldown marker is transient (cleared by the next success); this
+        log is history. Appending per event means an invocation the limiter
+        kills before its first paper commit still leaves its throttle events
+        on disk, so the final report shows the run's lifetime throttling —
+        not just the invocation that happened to finish.
+        """
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        row = {"at": _iso_z(now), "status": int(status), "backoff_seconds": float(sleep_seconds or 0.0)}
+        with self._rate_limit_events_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+            fh.flush()
+        self._accumulate_rate_limit(row["status"], row["backoff_seconds"])
+
+    def rate_limit_telemetry(self) -> dict:
+        """Run-lifetime throttle totals: every invocation's events, this one included."""
+        telemetry = self._rate_limit_telemetry
+        return {
+            "events": telemetry["events"],
+            "backoff_seconds": telemetry["backoff_seconds"],
+            "statuses": dict(telemetry["statuses"]),
+        }
 
     def stored_candidates(self, arxiv_id: str) -> Optional[list]:
         """The committed candidates for a done paper, or ``None`` if not done."""
@@ -173,6 +204,15 @@ class ScrapeCheckpoint:
             self._qa_cache[row["key"]] = row["result"]
         for row in _iter_jsonl(self._gate_cache_path):
             self._gate_cache[row["key"]] = bool(row["result"])
+        for row in _iter_jsonl(self._rate_limit_events_path):
+            self._accumulate_rate_limit(row["status"], row["backoff_seconds"])
+
+    def _accumulate_rate_limit(self, status, backoff_seconds) -> None:
+        telemetry = self._rate_limit_telemetry
+        telemetry["events"] += 1
+        telemetry["backoff_seconds"] += float(backoff_seconds or 0.0)
+        status_key = str(status)
+        telemetry["statuses"][status_key] = telemetry["statuses"].get(status_key, 0) + 1
 
 
 def _statement_key(statement: str) -> str:

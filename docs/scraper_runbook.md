@@ -119,6 +119,7 @@ _progress/                    checkpoint store (production scrapes)
   qa_cache.jsonl              cached Sonnet Q+A answers
   gate_cache.jsonl            cached Haiku gate verdicts
   rate_limited_at             last 429/503 timestamp while cooling down
+  rate_limit_events.jsonl     durable 429/503 log (at/status/backoff per event)
   INCOMPLETE                  present only while a run is unfinished
 ```
 
@@ -146,6 +147,13 @@ that timestamp. A resume inside the cooldown window refuses to start and prints
 the retry time instead of immediately re-hitting arXiv. Tune the window with
 `ICEPICK_ARXIV_COOLDOWN_SECONDS` (default 1200; set `0` only for deliberate
 operator override).
+
+Every 429/503 is also appended to `_progress/rate_limit_events.jsonl` as it
+happens, so the throttle telemetry in the final `source_report.md` covers the
+run's **whole lifetime** — including an invocation the limiter killed before it
+committed a single paper (that invocation writes no report of its own). The
+first successful request clears only the cooldown marker; the event log stays
+as the audit trail.
 
 ## Alternative: bring your own records (manual mount)
 

@@ -105,6 +105,12 @@ class ScrapeResult:
     ``call_budget`` governs and the run report surfaces. ``gate_calls`` is
     the cheap Haiku theorem-quality pre-filter; ``qa_calls`` is the
     expensive Sonnet reformulation on gate survivors.
+
+    The ``rate_limit_*`` fields cover the run's whole lifetime when a
+    checkpoint is in play: 429/503 events are journaled to the progress
+    store as they happen, so throttling that killed an earlier invocation
+    still shows up in the invocation that finally completes. Without a
+    checkpoint they cover this call only.
     """
 
     candidates: list
@@ -217,6 +223,9 @@ def scrape(
         if int(status) == 429:
             pending_429_page_halve = True
         if checkpoint is not None:
+            # Durable as it happens: an invocation the limiter kills before
+            # its first paper commit must not take its telemetry with it.
+            checkpoint.record_rate_limit(status, sleep_seconds)
             checkpoint.stamp_rate_limited()
 
     def on_success():
@@ -365,6 +374,16 @@ def scrape(
         )
     if target_count:
         candidates = candidates[:target_count]
+    if checkpoint is not None:
+        # Report run-LIFETIME throttle telemetry, not this invocation's
+        # slice: a prior invocation 429-killed before any paper commit left
+        # its events only in the checkpoint's durable log (its ScrapeResult
+        # never existed). The lifetime totals already include the events
+        # recorded above, so this replaces the in-memory counts.
+        lifetime = checkpoint.rate_limit_telemetry()
+        rate_limit_events = lifetime["events"]
+        rate_limit_backoff_seconds = lifetime["backoff_seconds"]
+        rate_limit_statuses = lifetime["statuses"]
     return ScrapeResult(
         candidates=candidates,
         papers_seen=papers_seen,

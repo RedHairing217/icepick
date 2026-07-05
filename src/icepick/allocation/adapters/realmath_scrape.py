@@ -835,6 +835,9 @@ def _write_report(outcome: ScrapeRunResult, result: NormaliseResult, *, created_
             lines += [
                 "## arXiv throttle telemetry",
                 "",
+                "Totals span the run's whole lifetime — every invocation of this",
+                "run_id, including any the limiter killed before a paper committed.",
+                "",
                 "| metric | value |",
                 "| --- | --- |",
                 f"| 429/503 encounters | {acq.get('rate_limit_events', 0)} |",

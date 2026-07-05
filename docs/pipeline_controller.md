@@ -181,6 +181,7 @@ _progress/                       restartability infra
 ├── qa_cache.jsonl               keyed by SHA1(statement) → generator result
 ├── gate_cache.jsonl             keyed by SHA1(statement) → Haiku gate verdict
 ├── rate_limited_at              ISO timestamp of last 429/503, if cooling down
+├── rate_limit_events.jsonl      append-only 429/503 log: {at, status, backoff_seconds}
 └── INCOMPLETE                   marker while run is unfinished
 ```
 
@@ -407,6 +408,8 @@ sufficient to resume without redoing completed items.
 
 **arXiv cooldown marker**: a 429/503 stamps `_progress/rate_limited_at`. While the marker is fresher than `ICEPICK_ARXIV_COOLDOWN_SECONDS` (default 1200), a resume refuses to hit arXiv and reports the retry time. Any successful Atom or e-print request clears the marker.
 
+**Throttle telemetry is run-lifetime**: every 429/503 is also appended to `_progress/rate_limit_events.jsonl` (timestamp, status, backoff slept) the moment it happens, before any retry or death. Resumes merge this log, so the `rate_limit_*` numbers in the final report and manifest cover every invocation of the run — including one the limiter killed before its first paper commit, which writes no report of its own. Clearing the cooldown marker never touches this log.
+
 **Cascade retries** live in a separate mechanism — [`poser/cascade.py`](../src/icepick/processing/poser/cascade.py) `_run_stage_with_retries`. Transient network errors get retried per-uid within a stage, up to `--max-retries` attempts with exponential backoff. Different granularity than the scraper/pass@k checkpoints — cascade retries transient failures INSIDE a stage's runtime; scraper/pass@k resume ACROSS invocations.
 
 ---
@@ -435,8 +438,8 @@ should read these instead of parsing stdout.
             "gate_calls": N, "qa_calls": N,
             "total_calls": N, "call_budget": N,
             "resumed_papers": N,
-            "rate_limit_events": N,
-            "rate_limit_backoff_seconds": N,
+            "rate_limit_events": N,          // run-lifetime, all invocations
+            "rate_limit_backoff_seconds": N, // run-lifetime, all invocations
             "rate_limit_statuses": {"429": N, "503": N},
             "token_usage": {"gate_cache_read_input_tokens": N,
                             "qa_cache_read_input_tokens": N}}

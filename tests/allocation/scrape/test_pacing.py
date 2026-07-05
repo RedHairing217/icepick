@@ -162,6 +162,45 @@ def test_final_rate_limit_stamps_checkpoint_marker(monkeypatch, tmp_path, _fake_
     assert sleeps == []
 
 
+def test_run_lifetime_telemetry_survives_a_429_death_before_first_commit(monkeypatch, tmp_path, _fake_net):
+    """Invocation one dies to the limiter with ZERO papers committed; the
+    resumed invocation completes and its result must still carry those
+    throttle events — the run report is written only by the invocation
+    that finishes, so per-invocation in-memory counters alone lose them.
+    """
+    monkeypatch.setattr(source, "_MIN_REQUEST_INTERVAL", 0.0)
+    progress = tmp_path / "_progress"
+
+    def fetcher(query, *, start, max_results):
+        return source._http_get("u", timeout=5, retries=2, backoff=3).text
+
+    # Invocation 1: 429 (3s backoff), 429 on the final attempt → death.
+    fake, sleeps, clock = _fake_net([_Resp(status=429), _Resp(status=429)])
+    with pytest.raises(_FakeRequests.HTTPError):
+        source.scrape(
+            scrape_window={"category": "math.AP"}, source_name="s", target_count=1,
+            fetcher=fetcher, checkpoint=ScrapeCheckpoint(progress),
+        )
+    assert sleeps == [pytest.approx(3.0)]
+    assert (progress / "rate_limit_events.jsonl").exists()  # durable despite the death
+
+    # Invocation 2, after the cooldown: clean run to completion.
+    monkeypatch.setenv("ICEPICK_ARXIV_COOLDOWN_SECONDS", "0")
+    fake, sleeps, clock = _fake_net([_Resp(text=_ONE_PAPER_FEED), _Resp(text=_EMPTY_FEED)])
+    result = source.scrape(
+        scrape_window={"category": "math.AP"}, source_name="s", target_count=2,
+        fetcher=fetcher, checkpoint=ScrapeCheckpoint(progress),
+    )
+    assert result.interrupted is False
+    # Lifetime totals: both 429s from the dead first invocation, none new.
+    assert result.rate_limit_events == 2
+    assert result.rate_limit_backoff_seconds == pytest.approx(3.0)
+    assert result.rate_limit_statuses == {"429": 2}
+    # The success cleared the transient cooldown marker, not the event log.
+    assert not (progress / "rate_limited_at").exists()
+    assert (progress / "rate_limit_events.jsonl").exists()
+
+
 def test_latex_fetcher_gets_same_rate_limit_marker_treatment(monkeypatch, tmp_path, _fake_net):
     monkeypatch.setattr(source, "_MIN_REQUEST_INTERVAL", 0.0)
     fake, sleeps, clock = _fake_net([_Resp(status=503), _Resp(status=200, text="tarball")])
