@@ -66,11 +66,12 @@ without explicit direction.
    filters; single claude:anthropic over-accepts (passed 2 circulars).
    Files: `out/wellposed_pde625_claude_anthropic/stage{3,12}_kill_analysis.{md,jsonl}`.
 
-## Uncommitted work in tree (another session's — don't commit/revert)
+## Working tree
 
-`--exclude-from-run` feature: `allocation/adapters/realmath_scrape.py`,
-`allocation/scrape/realmath.py`, `cli.py` (hunks ~@715, ~@1494), 3 allocation
-tests. Commit only your own paths, surgically.
+Clean as of `da269ac`. The formerly-uncommitted scrape work
+(`--exclude-from-run` + honest QA-model report label) landed as `cacf347`.
+House rule stands: parallel sessions share this checkout — check `git status`
+before committing and commit only your own paths, surgically.
 
 ## Open decisions (Nicky's)
 
