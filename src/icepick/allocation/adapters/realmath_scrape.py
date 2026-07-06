@@ -85,6 +85,7 @@ _PLAN_REQUIRED_FIELDS = {"source_name", "target_count", "requested_by", "request
 _PLAN_OPTIONAL_FIELDS = {"families", "scrape_window", "fixture_path", "notes"}
 _SCRAPE_WINDOW_FIELDS = {
     "year", "month", "category", "max_papers", "max_per_paper", "primary_only", "extraction",
+    "exclude_arxiv_ids",  # continuation: papers a prior run already consumed
 }
 
 _NORMALISE_REQUIRED_FIELDS = {"source_name", "candidates"}
@@ -280,6 +281,7 @@ def run(manifest, *, now: Optional[datetime] = None):
         "arxiv_queries": scrape_result.queries,
         "latex_fetches": scrape_result.latex_fetches,
         "qa_calls": scrape_result.qa_calls,
+        "qa_model": scrape_result.qa_model,
         "rate_limit_events": scrape_result.rate_limit_events,
         "rate_limit_backoff_seconds": scrape_result.rate_limit_backoff_seconds,
         "rate_limit_statuses": scrape_result.rate_limit_statuses,
@@ -776,6 +778,12 @@ def _validated_scrape_window(window) -> Optional[dict]:
     unknown = set(window) - _SCRAPE_WINDOW_FIELDS
     if unknown:
         raise ValueError(f"unknown scrape_window fields: {sorted(unknown)}")
+    exclude = window.get("exclude_arxiv_ids")
+    if exclude is not None:
+        if not isinstance(exclude, list) or not all(
+            isinstance(item, str) and item.strip() for item in exclude
+        ):
+            raise ValueError("exclude_arxiv_ids must be a list of non-empty arxiv id strings")
     return dict(window)
 
 
@@ -888,7 +896,7 @@ def _write_report(
             "| --- | --- |",
             f"| arxiv_query | {acq.get('arxiv_queries', 0)} |",
             f"| latex_source_fetch | {acq.get('latex_fetches', 0)} |",
-            f"| qa_generation (Sonnet) | {acq.get('qa_calls', 0)} |",
+            f"| qa_generation ({acq.get('qa_model') or 'model unrecorded'}) | {acq.get('qa_calls', 0)} |",
             f"| total | {acq.get('total_calls', 0)}"
             + (f" / {budget} budgeted" if budget is not None else "") + " |",
             "",

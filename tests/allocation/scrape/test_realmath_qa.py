@@ -258,3 +258,37 @@ def test_default_qa_generator_sends_prompt_cache_and_reports_usage(monkeypatch):
             "cache_creation_input_tokens": 20,
         },
     ]
+
+
+def test_default_qa_generator_reports_the_resolved_model(monkeypatch):
+    """The report must label QA with the model actually used: the key-file
+    ANTHROPIC_MODEL override silently replaces the Sonnet default, so an
+    honest report has to reflect the resolved model, not a hardcoded name."""
+
+    class _Messages:
+        def create(self, **kwargs):
+            return types.SimpleNamespace(
+                content=[types.SimpleNamespace(
+                    type="text",
+                    text='{"question": "Q?", "answer": "42", "is_good_theorem": true}',
+                )],
+                usage=types.SimpleNamespace(input_tokens=1, output_tokens=1),
+            )
+
+    class _Client:
+        def __init__(self, api_key):
+            self.messages = _Messages()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
+    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=_Client))
+
+    seen = []
+    source.default_qa_generator("Theorem.", model_callback=seen.append)
+    assert seen == ["claude-sonnet-4-6"]  # the code default when nothing overrides
+
+    seen.clear()
+    source.default_qa_generator(
+        "Theorem.", model="claude-haiku-4-5-20251001", model_callback=seen.append
+    )
+    assert seen == ["claude-haiku-4-5-20251001"]  # an explicit/override model is what gets reported

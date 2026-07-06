@@ -193,6 +193,21 @@ def test_scrape_max_per_paper_forces_breadth(monkeypatch):
     assert len(kept_and_surplus) == 20  # every extracted row accounted for
 
 
+def test_scrape_excluded_ids_are_skipped_without_counting():
+    """Continuation: papers a prior run consumed are passed over for free —
+    never extracted, never counted toward max_papers — so a follow-up run
+    starts spending at the first unseen paper."""
+    result = source.scrape(
+        scrape_window={"category": "math.AP", "max_papers": 1,
+                       "exclude_arxiv_ids": ["2604.00001"]},
+        source_name="pde", target_count=10, fetcher=_one_page_fetcher(),
+    )
+    # The single max_papers slot goes to the next unseen paper, not the
+    # excluded one (contrast: test_scrape_respects_max_papers takes 00001).
+    assert result.papers_seen == 1
+    assert [c["arxiv_id"] for c in result.candidates] == ["2604.00002"]
+
+
 def test_scrape_target_count_overflow_lands_in_surplus():
     """Hitting the target mid-paper preserves that paper's remaining rows."""
     def dense(paper, *, family=None):

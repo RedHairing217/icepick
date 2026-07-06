@@ -129,6 +129,7 @@ class ScrapeResult:
     interrupted: bool = False  # stopped early (Ctrl-C); disk state resumes it
     resumed_papers: int = 0  # papers served from the checkpoint, not refetched
     surplus: list = field(default_factory=list)  # cap overflow — preserved, mount-ready downstream
+    qa_model: Optional[str] = None  # model the QA generator actually used (None if not qa / all-cached)
 
 
 class _BudgetExhausted(BaseException):
@@ -189,6 +190,7 @@ def scrape(
     # theorems must not spend past the approved cap between outer checks.
     counts = {"queries": 0, "latex_fetches": 0, "qa_calls": 0}
     token_usage: dict = {}
+    qa_model_used = {"name": None}  # actual model the QA generator resolved (key-file override wins)
     rate_limit_statuses: dict = {}
     rate_limit_events = 0
     rate_limit_backoff_seconds = 0.0
@@ -252,7 +254,10 @@ def scrape(
     def counting_qa(statement, **kwargs):
         charge("qa_calls")
         return default_qa_generator(
-            statement, usage_callback=lambda usage: record_token_usage("qa", usage), **kwargs
+            statement,
+            usage_callback=lambda usage: record_token_usage("qa", usage),
+            model_callback=lambda name: qa_model_used.__setitem__("name", name),
+            **kwargs,
         )
 
     if checkpoint is not None:
@@ -280,7 +285,11 @@ def scrape(
     candidates: list = []
     surplus: list = []
     warnings: list = []
-    seen_ids: set = set()
+    # Continuation support: ids listed in the window are treated as already
+    # seen, so a follow-up run pages cheaply past papers a prior run consumed
+    # (skipped before max_papers counting, e-print fetch, and QA spend) and
+    # starts paying at the first unseen paper. Order-independent dedup.
+    seen_ids: set = set(window.get("exclude_arxiv_ids") or [])
     seen_titles: set = set()
     papers_seen = 0
     resumed_papers = 0
@@ -397,6 +406,7 @@ def scrape(
         token_usage=token_usage,
         interrupted=interrupted,
         resumed_papers=resumed_papers,
+        qa_model=qa_model_used["name"],
     )
 
 
@@ -967,6 +977,7 @@ def default_qa_generator(
     model: Optional[str] = None,
     max_tokens: int = 1024,
     usage_callback: Optional[Callable] = None,
+    model_callback: Optional[Callable] = None,
 ) -> Optional[dict]:
     """Extract a question + paper-stated answer from a theorem via Anthropic.
 
@@ -1001,6 +1012,10 @@ def default_qa_generator(
     # Operators can override via ANTHROPIC_MODEL in the key file or pass
     # ``model=`` explicitly.
     model = model or file_model or "claude-sonnet-4-6"
+    # Surface the model actually used so the run report labels QA honestly
+    # (the key-file ANTHROPIC_MODEL override wins over the Sonnet default).
+    if model_callback is not None:
+        model_callback(model)
 
     try:
         import anthropic  # lazy: only qa-mode production scraping needs the SDK

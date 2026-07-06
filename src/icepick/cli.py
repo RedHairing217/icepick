@@ -716,6 +716,16 @@ def _build_allocation(sub) -> None:
     p.add_argument("--month", type=int, default=None, help="Scrape-window start month (1-12).")
     p.add_argument("--max-papers", type=int, default=None, help="Cap on papers to scrape.")
     p.add_argument(
+        "--exclude-from-run",
+        action="append",
+        default=None,
+        metavar="RUN_DIR",
+        help="Continuation: skip papers a prior run already consumed. Points at a "
+        "previous run directory; its _progress/papers_done.jsonl arxiv ids are "
+        "recorded in the plan and treated as already-seen at scrape time "
+        "(skipped before paper caps and paid extraction). Repeatable.",
+    )
+    p.add_argument(
         "--max-per-paper",
         type=int,
         default=None,
@@ -1482,7 +1492,36 @@ def _scrape_window_from_args(args) -> Optional[dict]:
         window["primary_only"] = True
     if args.extraction:
         window["extraction"] = args.extraction
+    if getattr(args, "exclude_from_run", None):
+        exclude = _exclude_ids_from_runs(args.exclude_from_run)
+        if exclude:
+            window["exclude_arxiv_ids"] = exclude
     return window or None
+
+
+def _exclude_ids_from_runs(run_dirs) -> list:
+    """Collect already-consumed arxiv ids from prior runs' progress ledgers.
+
+    Reads ``<run_dir>/_progress/papers_done.jsonl`` for each directory. A
+    missing ledger is refused rather than silently excluding nothing — a
+    typo'd path would otherwise re-scrape (and re-bill) every paper the
+    operator meant to skip.
+    """
+    ids: set = set()
+    for run_dir in run_dirs:
+        ledger = Path(run_dir) / "_progress" / "papers_done.jsonl"
+        if not ledger.is_file():
+            raise SystemExit(
+                f"--exclude-from-run: no progress ledger at {ledger} "
+                "(expected a prior run directory containing _progress/papers_done.jsonl)"
+            )
+        for line in ledger.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            arxiv_id = json.loads(line).get("arxiv_id")
+            if arxiv_id:
+                ids.add(str(arxiv_id))
+    return sorted(ids)
 
 
 def _parse_columns(column_args):

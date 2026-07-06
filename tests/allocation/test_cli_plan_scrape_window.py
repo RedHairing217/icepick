@@ -99,3 +99,31 @@ def test_auto_approved_manifest_carries_the_scrape_window(tmp_path, capsys):
     manifest = json.loads(manifest_path.read_text())
     assert manifest["scrape_window"]["category"] == "math.AP"
     assert manifest["scrape_window"]["primary_only"] is True
+
+
+def test_plan_exclude_from_run_records_prior_papers(tmp_path, capsys):
+    """Continuation: --exclude-from-run folds a prior run's consumed paper ids
+    into the window so the next scrape pages past them without re-billing."""
+    prior = tmp_path / "prior_run"
+    (prior / "_progress").mkdir(parents=True)
+    (prior / "_progress" / "papers_done.jsonl").write_text(
+        '{"arxiv_id": "2604.00001", "candidates": 3}\n'
+        '{"arxiv_id": "2604.00002", "candidates": 1}\n'
+        '{"arxiv_id": "2604.00001", "candidates": 3}\n'  # dup collapses
+    )
+    rc, _ = _run_plan(tmp_path, [
+        "--category", "math.AP",
+        "--exclude-from-run", str(prior),
+    ])
+    assert rc == 0
+    _, plan = _plan_json(capsys)
+    assert plan["scrape_window"]["exclude_arxiv_ids"] == ["2604.00001", "2604.00002"]
+
+
+def test_plan_exclude_from_run_refuses_a_missing_ledger(tmp_path):
+    """A typo'd run dir must refuse loudly, not silently exclude nothing."""
+    import pytest
+
+    with pytest.raises(SystemExit, match="papers_done.jsonl"):
+        _run_plan(tmp_path, ["--category", "math.AP",
+                             "--exclude-from-run", str(tmp_path / "nope")])
