@@ -541,5 +541,7 @@ work already done.
 - Full test suite: 420 pass, 3 live-only skipped.
 - Empirical cost for 25-record end-to-end pipeline: ~$0.32 with Qwen local; ~$5.60 with all paid backends (~94% cheaper).
 
-For handoff context on WHAT to do next, see the most recent SESSION HANDOFF
-message in the working conversation, not this file.
+For handoff context on WHAT to do next, see
+[`docs/SESSION_HANDOFF.md`](SESSION_HANDOFF.md) (canonical, updated at session
+end), falling back to the most recent SESSION HANDOFF message in the working
+conversation.
