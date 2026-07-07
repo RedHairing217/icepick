@@ -76,12 +76,15 @@ without explicit direction.
    Files: `out/wellposed_pde625_claude_anthropic/stage{3,12}_kill_analysis.{md,jsonl}`.
    *Caveat for 3–4 (2026-07-06): both audits measured **gpt-4.1-mini**; the
    live judge is now gpt-5.5@high and the rates do not transfer. A 40-kill
-   gpt-5.5 revalidation (single-sample) put its false-kill rate at ~1/3 of
-   the human-ruled false kills (vs 100% for mini) and showed it passes the
-   3 degenerate_circular genuine catches (prompt-literal: a circular
-   statement does determine its answer — degeneracy scanner owns those)
-   while keeping the underspecified ones. Advisory-vs-gating for stage 3 is
-   worth re-deciding on gpt-5.5 evidence + its ~$20–45/batch price tag.*
+   gpt-5.5 revalidation (single-sample, $1.29): of the 33 human-ruled false
+   kills it passes 18, still flags 14 (44% of the 32 parsed — vs 100% for
+   mini on these records), 1 unresolved error (burned the full 4000-token
+   cap thinking, twice); of the 6 genuine catches it keeps all 3
+   underspecified ones and passes the 3 degenerate_circular ones
+   (prompt-literal: a circular statement does determine its answer — the
+   degeneracy scanner owns those). Hard-tail mean cost $0.032/billed
+   sample, mean ~900 reasoning tok. Advisory-vs-gating for stage 3 is worth
+   re-deciding on gpt-5.5 evidence + its ~$20–60/batch price tag.*
 
 ## Doc architecture (2026-07-06)
 
