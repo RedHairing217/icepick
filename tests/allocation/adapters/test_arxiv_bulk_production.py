@@ -542,3 +542,57 @@ def test_production_unused_tar_helpers_are_importable():
     with tarfile.open(fileobj=buf, mode="w:gz"):
         pass
     assert buf.getvalue()
+
+
+def test_default_oai_fetcher_returns_oairesponse_on_200(monkeypatch):
+    # The live-path wiring gap that crashed the first production run: the
+    # default fetcher must be REAL. Offline: urlopen is monkeypatched.
+    import urllib.request
+
+    from icepick.allocation.bulk.category_index import OAIResponse
+
+    class _Resp:
+        status = 200
+
+        def read(self):
+            return b"<xml>ok</xml>"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    seen = {}
+
+    def fake_urlopen(request, timeout=None):
+        seen["url"] = request.full_url
+        seen["ua"] = request.get_header("User-agent")
+        seen["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    out = arxiv_bulk._default_oai_fetcher()("https://oaipmh.example/oai?verb=X")
+    assert isinstance(out, OAIResponse)
+    assert (out.status, out.retry_after, out.text) == (200, None, "<xml>ok</xml>")
+    assert seen["ua"].startswith("icepick-arxiv-bulk/") and seen["timeout"] == 60
+
+
+def test_default_oai_fetcher_returns_503_with_retry_after(monkeypatch):
+    # Throttles come back as data (CategoryIndex owns backoff), never raise.
+    import email.message
+    import io as _io
+    import urllib.error
+    import urllib.request
+
+    headers = email.message.Message()
+    headers["Retry-After"] = "30"
+
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.HTTPError(
+            request.full_url, 503, "throttled", headers, _io.BytesIO(b"slow down")
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    out = arxiv_bulk._default_oai_fetcher()("https://oaipmh.example/oai?verb=X")
+    assert (out.status, out.retry_after, out.text) == (503, 30.0, "slow down")

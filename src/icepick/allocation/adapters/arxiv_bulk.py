@@ -931,16 +931,39 @@ def _build_category_index(manifest, run_dir: Path, window: dict, counts: dict, c
 
 
 def _default_oai_fetcher():
-    """The real OAI HTTP fetcher (never called in tests; seam for monkeypatch).
+    """The real OAI HTTP fetcher: ``url -> category_index.OAIResponse``.
 
-    Production must wire a fetcher that returns a ``category_index.OAIResponse``
-    (status / retry_after / text); the offline tests replace
-    ``_build_category_index`` wholesale, so this stub only guards against an
-    un-wired live path.
+    urllib (stdlib) on purpose — the ``[bulk]`` extra stays boto3-only. HTTP
+    error statuses (503 throttles included) are RETURNED as ``OAIResponse``
+    so ``CategoryIndex`` keeps owning the retry/backoff policy; only transport
+    failures (DNS, refused connection) propagate — those are operator-facing
+    environment errors, not throttling. Offline tests replace
+    ``_build_category_index`` wholesale and never reach this fetcher.
     """
+    import urllib.error
+    import urllib.request
 
-    def fetch(url):  # pragma: no cover - offline tests replace _build_category_index
-        raise RuntimeError("no live OAI fetcher wired; production must inject one")
+    from icepick.allocation.bulk.category_index import OAIResponse
+
+    def fetch(url):
+        request = urllib.request.Request(
+            url, headers={"User-Agent": "icepick-arxiv-bulk/0.0.1"}
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return OAIResponse(
+                    status=response.status,
+                    retry_after=None,
+                    text=response.read().decode("utf-8"),
+                )
+        except urllib.error.HTTPError as err:
+            raw = err.headers.get("Retry-After")
+            retry_after = float(raw) if raw and str(raw).strip().isdigit() else None
+            return OAIResponse(
+                status=err.code,
+                retry_after=retry_after,
+                text=err.read().decode("utf-8", "replace"),
+            )
 
     return fetch
 
