@@ -129,3 +129,38 @@ amortization lever; opt-in flag, measure agreement first) · T2.5 live
 re-validation of single-stage qa estimates · T1.4 e-print parity check.
 (Resolved 2026-07-06: the stale "NOT a git repo" line is gone — git truth now
 lives in AGENTS.md, "Git & shared-checkout discipline".)
+
+## Batch 7 fold + Tier-1 stage-1-redundancy read-out (2026-07-07)
+
+1. **Batch 7 (`20260706T213646Z`) COMPLETE + FOLDED** (Nicky "fold 7").
+   Cascade 309 → 180 (codex:openai, OLD mini judge) → 126 (codex:anthropic)
+   → 126 (claude:openai advisory). pass@k on local Qwen (126 records, 664
+   calls, $0, `interrupted:false`): **18 band / 24 solved / 43 drop / 24
+   collapse / 17 misdirection**. Folded per the merge_batch4-6 convention
+   (guards: pre-fold 558/90 asserted, 0 uid collisions, post-fold re-verified
+   from disk; backups `.bak-pre-batch7fold`). **Corpus `out/corpus_pde625/`
+   now 684 well-posed / 108 band** = b1 12 + b2 11 + fk33 5 + b3 10 + b4 24
+   + b5 12 + b6 16 + b7 18. `fcb3bcab` still pending (→109 if band).
+2. **Tier-1 stage-1-redundancy experiment DONE** (approved; $1.17 actual,
+   ~24 min). Batch 7's 129 mini-stage-1 kills re-judged by a Sonnet-only
+   gate (`--stages codex:anthropic`), `out/ab_stage1/sonnet_on_kills/`:
+   **108 ill_posed / 20 well_posed / 1 deterministic error** ("judge replies
+   not parseable", 0/3 samples parsed across base+2 retries, uid
+   `119e01d1…` — re-run won't fix). **Y = 108/128 = 84.4% redundant**,
+   0.6 pt under the >85% kill-stage-1 line (top of the 70–85% escalate
+   band). Economics if stage 1 dies: ~$23/batch gpt-5.5 stage-1 judge saved
+   − ~$1.2 extra stage-2 Sonnet (full population) − ~$1.5 extra stage-3
+   advisory volume ≈ **$20/batch net**; the 20 stage-1-unique kills would
+   reach stage-3 advisory (flagged, not silent) then free pass@k. Caveat:
+   measures redundancy over *mini's* kill set, not what a gpt-5.5 stage 1
+   would kill.
+3. **Decision DEFERRED — full-scale stage-1 kill census in flight** (Nicky,
+   separate session) as the superseding evidence source; kill/keep lands
+   after it reports. `scratch_r1.py` (repo root) is a census-side sympy
+   homogeneity check of a Weinstein-type sharp-constant record, committed
+   as-is on "commit everything".
+4. Git truth at write: unpushed = `a02ce0d` (gpt-5.5 judge refactor) +
+   `49d1c3b` (its ledger) + `fc9533c` (arxiv_bulk: real default OAI fetcher,
+   parallel session) + this session's commits; `095dc13` and `2ff2b41` ARE
+   on origin (the "Working tree" section above predates that push). Still
+   no push without Nicky's explicit word.
