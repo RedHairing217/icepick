@@ -8,6 +8,10 @@ the **portable processing surface with in-house acquisition**: it scrapes and
 harvests its own source records (RealMath-style, behind the `allocation`
 subsystem), ingests them, and runs the poser fleet as the final gate.
 
+> **Agents** (Claude Code, Codex, or any other harness): read
+> [`AGENTS.md`](AGENTS.md) before touching anything — it is the canonical
+> operating brief (safety invariants, budget gates, holds, test baselines).
+
 ## Pipeline
 
 ```

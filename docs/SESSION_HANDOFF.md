@@ -1,8 +1,11 @@
 # Icepick — Session Handoff
 
-**Current as of 2026-07-05 ~22:00 local (UTC-7). Disk-verified at write time.**
-Paste-equivalent for a fresh Claude session; also the canonical "what's next"
-context referenced by `pipeline_controller.md`. Update this file at session end.
+**Current as of 2026-07-05 ~22:00 local (UTC-7). Disk-verified at write time.
+Doc architecture, tree state, and test baselines refreshed 2026-07-06.**
+Paste-equivalent for a fresh agent session (Claude Code, Codex, or human
+operator); also the canonical "what's next" context referenced by
+`pipeline_controller.md`. Whichever agent you are, update this file at
+session end — one shared ledger, not one per vendor.
 
 Repo: `github.com/RedHairing217/icepick`, branch `main`, synced @ `6ceb1ce`.
 Local checkout: `/Users/redhairing/Desktop/helloworld/icepick/`.
@@ -28,8 +31,9 @@ allocation (scrape/mount) → wellposed cascade → pass@k (local Qwen) → labe
 - Qwen pass@k: LM Studio `http://127.0.0.1:1234/v1/chat/completions`,
   `qwen/qwen3-8b`, **max ONE concurrent call**, `--backend-url` mandatory.
 - Tests: `python3 -m pytest tests/ src/posers/Claude_Poser/tests
-  src/posers/Codex_Poser/tests --ignore=tests/integration` → **558 passed**.
-  Repo-root `pytest` → 428 + 3 skipped.
+  src/posers/Codex_Poser/tests --ignore=tests/integration` → **713 passed**.
+  Repo-root `pytest` → 604 + 3 skipped. (Re-measured 2026-07-06 after
+  arxiv_bulk landed as `095dc13`; the old 558/428 figures are pre-bulk.)
 - Immutability: `out/intake/`, `out/processing_*/`,
   `out/wellposed_pde625_claude_anthropic/verdicts/` are read-only; new files only.
 - Verify task notifications against disk + `ps` before acting (environment has
@@ -66,12 +70,30 @@ without explicit direction.
    filters; single claude:anthropic over-accepts (passed 2 circulars).
    Files: `out/wellposed_pde625_claude_anthropic/stage{3,12}_kill_analysis.{md,jsonl}`.
 
+## Doc architecture (2026-07-06)
+
+`AGENTS.md` (repo root) is now the **canonical agent brief** — invariants,
+gates, baselines, mission — readable by any agent (Codex auto-loads AGENTS.md,
+not CLAUDE.md). `CLAUDE.md` is a thin Claude Code wrapper that imports it;
+`src/posers/AGENTS.md` carries poser-local rules (judge-cache key semantics —
+prompt-text edits roll caches and re-bill — and env-file model config).
+**Edit AGENTS.md, not the wrappers.** The OpenAI-side refactor of the posers'
+judge calls (in flight, uncommitted, at this commit) should read
+`src/posers/AGENTS.md` before touching prompt text.
+
 ## Working tree
 
-Clean as of `da269ac`. The formerly-uncommitted scrape work
-(`--exclude-from-run` + honest QA-model report label) landed as `cacf347`.
-House rule stands: parallel sessions share this checkout — check `git status`
-before committing and commit only your own paths, surgically.
+Docs committed 2026-07-06 (the doc-architecture commit); `main` ahead of
+origin, unpushed: `095dc13` (arxiv_bulk adapter) + the AGENTS.md split.
+**Not otherwise clean at commit time** — in flight from parallel sessions:
+(a) an uncommitted OpenAI-side judge refactor (poser judge/config/scoring +
+new tests; three-suite count 725 with it vs the 713 committed baseline);
+(b) a live production pass@k run on local Qwen,
+`out/processing_20260706T213646Z` (started ~21:02 local). The
+formerly-uncommitted scrape work (`--exclude-from-run` + honest QA-model
+report label) landed as `cacf347`. House rule stands: parallel sessions share
+this checkout — check `git status` before committing and commit only your own
+paths, surgically. Never push without Nicky's explicit word.
 
 ## Open decisions (Nicky's)
 
@@ -82,10 +104,10 @@ before committing and commit only your own paths, surgically.
    (`out/processing_20260704_fk33rescue/README`, k12 recheck pattern).
 3. **Batch 3/4 hold status** — see contradiction above.
 
-## Open engineering targets (CLAUDE.md brief)
+## Open engineering targets (AGENTS.md brief)
 
 T2.3 empirical planning ratios · T2.4 QA generator batch mode (the real
 amortization lever; opt-in flag, measure agreement first) · T2.5 live
 re-validation of single-stage qa estimates · T1.4 e-print parity check.
-Known stale line: CLAUDE.md says "NOT a git repo" — it is (this file's header
-is authoritative).
+(Resolved 2026-07-06: the stale "NOT a git repo" line is gone — git truth now
+lives in AGENTS.md, "Git & shared-checkout discipline".)
