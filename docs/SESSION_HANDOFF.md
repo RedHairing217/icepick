@@ -26,14 +26,18 @@ allocation (scrape/mount) → wellposed cascade → pass@k (local Qwen) → labe
 
 - Keys: `ANTHROPIC_KEY_FILE=/Users/redhairing/Desktop/helloworld/anthro_key.env`
   (+ `openai_key.env` alongside). Judge models come from env-file
-  `ANTHROPIC_MODEL`/`OPENAI_MODEL` (sonnet-4-6 / gpt-4.1-mini) — never the
-  `--*-judge-model` flags (per-BUILD, poisons cross-provider combos).
+  `ANTHROPIC_MODEL`/`OPENAI_MODEL` (sonnet-4-6 / **gpt-5.5 as of 2026-07-06**,
+  was gpt-4.1-mini; optional `OPENAI_REASONING_EFFORT`, default high) — never
+  the `--*-judge-model` flags (per-BUILD, poisons cross-provider combos).
+  gpt-5.5 judge ≈ **$0.02/sample → $20–45 per 250-paper batch, over the $5
+  HITL line: get approval before batch-scale judge runs.** The swap rolled
+  all OpenAI judge cache keys (next run re-bills every judge sample).
 - Qwen pass@k: LM Studio `http://127.0.0.1:1234/v1/chat/completions`,
   `qwen/qwen3-8b`, **max ONE concurrent call**, `--backend-url` mandatory.
 - Tests: `python3 -m pytest tests/ src/posers/Claude_Poser/tests
-  src/posers/Codex_Poser/tests --ignore=tests/integration` → **713 passed**.
-  Repo-root `pytest` → 604 + 3 skipped. (Re-measured 2026-07-06 after
-  arxiv_bulk landed as `095dc13`; the old 558/428 figures are pre-bulk.)
+  src/posers/Codex_Poser/tests --ignore=tests/integration` → **726 passed**.
+  Repo-root `pytest` → 605 + 3 skipped. (Re-measured 2026-07-06 after the
+  gpt-5.5 judge refactor landed; 713/604 was post-arxiv_bulk, 558/428 pre-bulk.)
 - Immutability: `out/intake/`, `out/processing_*/`,
   `out/wellposed_pde625_claude_anthropic/verdicts/` are read-only; new files only.
 - Verify task notifications against disk + `ps` before acting (environment has
@@ -64,11 +68,20 @@ without explicit direction.
 2. **Prompt caching = measured no, everywhere** (extraction + all judge sites):
    max billed request 912 tok vs 2048 (Sonnet) / 1024 (OpenAI auto) floors;
    achievable saving $0.00/batch. Re-open only if statements grow ~4×, judge
-   models change, or provider floors drop.
+   models change, or provider floors drop. *"Judge models change" fired
+   2026-07-06 (gpt-5.5) and was re-checked: input side unchanged, still $0.*
 3. **Stage-3 kill audit**: 40 kills, 82.5% false → stage 3 demoted to advisory.
 4. **Stage-1/2 kill audit**: 22 kills, 12 false / 10 genuine → stages 1–2 STAY
    filters; single claude:anthropic over-accepts (passed 2 circulars).
    Files: `out/wellposed_pde625_claude_anthropic/stage{3,12}_kill_analysis.{md,jsonl}`.
+   *Caveat for 3–4 (2026-07-06): both audits measured **gpt-4.1-mini**; the
+   live judge is now gpt-5.5@high and the rates do not transfer. A 40-kill
+   gpt-5.5 revalidation (single-sample) put its false-kill rate at ~1/3 of
+   the human-ruled false kills (vs 100% for mini) and showed it passes the
+   3 degenerate_circular genuine catches (prompt-literal: a circular
+   statement does determine its answer — degeneracy scanner owns those)
+   while keeping the underspecified ones. Advisory-vs-gating for stage 3 is
+   worth re-deciding on gpt-5.5 evidence + its ~$20–45/batch price tag.*
 
 ## Doc architecture (2026-07-06)
 
@@ -83,17 +96,19 @@ judge calls (in flight, uncommitted, at this commit) should read
 
 ## Working tree
 
-Docs committed 2026-07-06 (the doc-architecture commit); `main` ahead of
-origin, unpushed: `095dc13` (arxiv_bulk adapter) + the AGENTS.md split.
-**Not otherwise clean at commit time** — in flight from parallel sessions:
-(a) an uncommitted OpenAI-side judge refactor (poser judge/config/scoring +
-new tests; three-suite count 725 with it vs the 713 committed baseline);
-(b) a live production pass@k run on local Qwen,
-`out/processing_20260706T213646Z` (started ~21:02 local). The
-formerly-uncommitted scrape work (`--exclude-from-run` + honest QA-model
-report label) landed as `cacf347`. House rule stands: parallel sessions share
-this checkout — check `git status` before committing and commit only your own
-paths, surgically. Never push without Nicky's explicit word.
+`main` ahead of origin, unpushed: `095dc13` (arxiv_bulk adapter), `2ff2b41`
+(AGENTS.md split), and the **gpt-5.5 judge refactor (landed 2026-07-06 in
+the same commit as this ledger edit)** — the previously-observed uncommitted
+judge refactor was lost with its session (spend cap) and was rebuilt +
+extended this session: family-branched params in both posers, pass@k
+param-gating, reasoning_tokens usage counters, 4000-token + 120s reasoning
+floors, 14 files, three-suite 726. `openai_key.env` `OPENAI_MODEL` flipped
+to gpt-5.5 (config change, outside the repo). Still live from parallel
+sessions at write time: a production pass@k on local Qwen,
+`out/processing_20260706T213646Z` (started ~21:02 local, PID 72627) — left
+alone. House rule stands: parallel sessions share this checkout — check
+`git status` before committing and commit only your own paths, surgically.
+Never push without Nicky's explicit word.
 
 ## Open decisions (Nicky's)
 

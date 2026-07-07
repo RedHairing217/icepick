@@ -122,6 +122,15 @@ any **OpenAI-compatible server** works as a drop-in: LM Studio, Ollama,
 vLLM, Together, Groq, etc. Just point the URL at the server's `/v1`
 endpoint and supply any token the server expects in `OPENAI_API_KEY`.
 
+Reasoning-family models (gpt-5.x, o-series) are sent the reasoning-model
+parameter surface: `reasoning_effort` (from `OPENAI_REASONING_EFFORT`,
+default `high`), `max_completion_tokens` instead of `max_tokens`, and no
+`temperature` — the API rejects both legacy params for these models. The
+raised token cap matters: reasoning tokens bill as completion tokens, so
+the old 400-token budget would be consumed by thinking. Non-reasoning
+models keep the historical wire format byte-for-byte, so their disk-cache
+keys and request shapes are unchanged.
+
 The judge cache key includes the provider and model, so swapping providers
 or models never reuses stale replies.
 

@@ -152,7 +152,10 @@ ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 
 # openai_key.env
 OPENAI_API_KEY=sk-...
-OPENAI_MODEL=o4-mini
+OPENAI_MODEL=gpt-5.5
+# optional; only read for reasoning-family models (gpt-5.x, o-series).
+# Defaults to high.
+OPENAI_REASONING_EFFORT=high
 ```
 
 icepick reads the right one per combo: a `claude:anthropic` or

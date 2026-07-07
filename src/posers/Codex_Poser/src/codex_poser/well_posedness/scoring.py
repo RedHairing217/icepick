@@ -169,6 +169,7 @@ def judge_residue(
     usage_total = {
         "input_tokens": 0,
         "output_tokens": 0,
+        "reasoning_tokens": 0,
         "cache_read_input_tokens": 0,
         "cache_creation_input_tokens": 0,
         "samples_with_usage": 0,
@@ -186,7 +187,7 @@ def judge_residue(
         replies.append(reply)
         if sample_usage:
             usage_total["samples_with_usage"] += 1
-            for field in ("input_tokens", "output_tokens",
+            for field in ("input_tokens", "output_tokens", "reasoning_tokens",
                           "cache_read_input_tokens", "cache_creation_input_tokens"):
                 usage_total[field] += int(sample_usage.get(field) or 0)
         parsed_reply = parse_judge_reply(reply)

@@ -32,10 +32,10 @@ trunk `main`.
 
 - Run tests (full, three suites):
   `python3 -m pytest tests/ src/posers/Claude_Poser/tests src/posers/Codex_Poser/tests --ignore=tests/integration`
-  → baseline **713 passed**. Repo-root `python3 -m pytest` → **604 passed,
-  3 skipped** (live tests skip without creds). Measured 2026-07-06,
-  post-arxiv_bulk. Below baseline = regression; if you add tests, update
-  these numbers in the same commit.
+  → baseline **726 passed**. Repo-root `python3 -m pytest` → **605 passed,
+  3 skipped** (live tests skip without creds). Measured 2026-07-06, post
+  gpt-5.5 judge refactor. Below baseline = regression; if you add tests,
+  update these numbers in the same commit.
 - Scrape-path tests: `pytest tests/allocation/scrape/` after every change
   there. `tests/allocation/scrape/test_pacing.py` asserts EXACT backoff
   schedules — extend, never delete.
@@ -48,6 +48,15 @@ trunk `main`.
   `OPENAI_MODEL` lines. Never steer a single provider via the cascade's
   `--*-judge-model` flags — they are per-build across providers (details in
   `src/posers/AGENTS.md`).
+- **OpenAI judge model is `gpt-5.5` at `OPENAI_REASONING_EFFORT=high` as of
+  2026-07-06** (was `gpt-4.1-mini`). Rates: $5/M input, $30/M output;
+  reasoning tokens bill as output. Measured judge cost ≈ **$0.02/sample**
+  (~50× gpt-4.1-mini), so a 250-paper batch's 1,000–2,000 OpenAI judge
+  samples run **~$20–45 — over the $5 HITL line; get approval before any
+  batch-scale judge run**. The swap rolled every OpenAI judge cache key
+  (keys include the model id), so the next run re-bills all judge samples.
+  All judge-quality baselines (stage-1 86% kill-confirmation, stage-3 82.5%
+  false-kill audit) were measured on gpt-4.1-mini and do not transfer.
 - Qwen pass@k endpoint: LM Studio at `http://127.0.0.1:1234/v1/chat/completions`,
   model `qwen/qwen3-8b`, `--backend-url` mandatory.
 
@@ -139,7 +148,11 @@ Findings that close old targets:
   saving: $0.00/batch of the theoretical $2.9 input-side ceiling. Both prompt
   families are already static-first, so the OpenAI side has nothing to
   reorder. Revisit only if statements grow ~4x, judge models change, or
-  Anthropic lowers the minimum.
+  Anthropic lowers the minimum. *Trigger re-checked 2026-07-06 when the
+  OpenAI judge moved to gpt-5.5: the swap changes no input-side tokens (max
+  request still 912 tok < the 1024 floor, which gpt-5.5 keeps), so the
+  conclusion stands — though at $5/M input the theoretical ceiling is now
+  ~12× larger, the reachable saving is still $0.*
 
 Open targets:
 - **T2.3 Empirical planning ratios**: recalibrate `PAPERS_PER_RECORD=4`,

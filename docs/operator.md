@@ -252,7 +252,9 @@ ANTHROPIC_MODEL=claude-opus-4-7
 
 # openai_key.env
 OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o
+OPENAI_MODEL=gpt-5.5
+# optional; reasoning-family models (gpt-5.x, o-series) only. Default: high.
+OPENAI_REASONING_EFFORT=high
 ```
 
 icepick reads the right one per stage / combo:

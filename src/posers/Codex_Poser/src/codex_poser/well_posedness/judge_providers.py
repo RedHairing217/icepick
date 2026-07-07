@@ -16,6 +16,26 @@ JudgeProvider = Literal["anthropic", "openai"]
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
 DEFAULT_MAX_TOKENS = 512
+
+# OpenAI's reasoning family (gpt-5.x, o-series) takes a different parameter
+# surface on the Responses API: temperature is rejected outright (HTTP 400,
+# verified against gpt-5.5 on 2026-07-06) and thinking depth is set via
+# reasoning.effort. Reasoning tokens bill as output tokens and count against
+# max_output_tokens, so the 512-token budget that fits a JSON verdict on
+# gpt-4.1-mini would be burned by thinking and the reply text comes back
+# empty — reasoning models get a much larger floor.
+REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+DEFAULT_REASONING_EFFORT = "high"
+REASONING_MIN_OUTPUT_TOKENS = 4000
+# High-effort reasoning regularly exceeds short read timeouts on hard
+# statements (observed against gpt-5.5, 2026-07-06); timed-out samples
+# become error votes. Floor the timeout for the reasoning family — an
+# explicit larger timeout_seconds is still honoured.
+REASONING_MIN_TIMEOUT_S = 120.0
+
+
+def is_reasoning_model(model: str) -> bool:
+    return model.lower().startswith(REASONING_MODEL_PREFIXES)
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 OPENAI_API_URL = "https://api.openai.com/v1/responses"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -33,6 +53,8 @@ class JudgeConfig:
     max_tokens: int = DEFAULT_MAX_TOKENS
     api_url: str = ""
     timeout_seconds: float = 60.0
+    # Only consulted when the model is in the reasoning family.
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT
 
 
 class JudgeCache:
@@ -123,17 +145,32 @@ class OpenAIJudge:
         self.config = config
 
     def __call__(self, prompt: str) -> tuple[str, dict]:
-        payload = {
-            "model": self.config.model,
-            "input": prompt,
-            "temperature": 0.2,
-            "max_output_tokens": self.config.max_tokens,
-        }
+        timeout_seconds = self.config.timeout_seconds
+        if is_reasoning_model(self.config.model):
+            timeout_seconds = max(timeout_seconds, REASONING_MIN_TIMEOUT_S)
+            payload = {
+                "model": self.config.model,
+                "input": prompt,
+                "reasoning": {"effort": self.config.reasoning_effort},
+                "max_output_tokens": max(
+                    self.config.max_tokens, REASONING_MIN_OUTPUT_TOKENS
+                ),
+            }
+        else:
+            # Wire format kept byte-identical for non-reasoning models so
+            # existing disk caches (keyed on provider:model + prompt) stay
+            # comparable across runs.
+            payload = {
+                "model": self.config.model,
+                "input": prompt,
+                "temperature": 0.2,
+                "max_output_tokens": self.config.max_tokens,
+            }
         data = _post_json(
             url=self.config.api_url or OPENAI_API_URL,
             payload=payload,
             headers={"authorization": f"Bearer {self.config.api_key}"},
-            timeout_seconds=self.config.timeout_seconds,
+            timeout_seconds=timeout_seconds,
             provider="OpenAI",
         )
         return _openai_text(data), _openai_usage(data)
@@ -219,6 +256,11 @@ def load_judge_config(
             or os.getenv("OPENAI_MODEL")
             or DEFAULT_OPENAI_MODEL
         )
+        reasoning_effort = (
+            values.get("OPENAI_REASONING_EFFORT")
+            or os.getenv("OPENAI_REASONING_EFFORT")
+            or DEFAULT_REASONING_EFFORT
+        )
         return JudgeConfig(
             provider=provider,
             api_key=api_key,
@@ -226,6 +268,7 @@ def load_judge_config(
             max_tokens=max_tokens,
             api_url=OPENAI_API_URL,
             timeout_seconds=timeout_seconds,
+            reasoning_effort=reasoning_effort,
         )
     raise ValueError(f"unsupported judge provider: {provider}")
 
@@ -327,4 +370,9 @@ def _openai_usage(data: dict) -> dict:
     out = {}
     out["input_tokens"] = usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0
     out["output_tokens"] = usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0
+    # Reasoning models report thinking spend under output_tokens_details
+    # (Responses API) / completion_tokens_details (chat completions). It is
+    # already included in output_tokens; recorded separately for cost audits.
+    details = usage.get("output_tokens_details") or usage.get("completion_tokens_details") or {}
+    out["reasoning_tokens"] = details.get("reasoning_tokens", 0) or 0
     return {k: v for k, v in out.items() if v}

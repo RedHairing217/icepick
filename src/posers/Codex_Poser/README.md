@@ -134,10 +134,16 @@ ANTHROPIC_MODEL=...
 ```text
 OPENAI_API_KEY=...
 OPENAI_MODEL=...
+OPENAI_REASONING_EFFORT=...
 ```
 
 Model values are optional and may be overridden with `--judge-model`. The key
-file is not part of this repo.
+file is not part of this repo. `OPENAI_REASONING_EFFORT` (optional, default
+`high`) is only consulted for reasoning-family models (gpt-5.x, o-series),
+which take a different wire format on the Responses API: `reasoning.effort`
+plus a raised `max_output_tokens` floor, and no `temperature` (the API
+rejects it for these models). Non-reasoning models keep the historical
+payload byte-for-byte.
 
 ## Output
 

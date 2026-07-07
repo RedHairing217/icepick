@@ -5,7 +5,12 @@ Supports two API backends, selected by cfg.judge_provider:
 - "openai"    : Chat Completions API via stdlib urllib. Honours
                 cfg.openai_base_url, so OpenAI-compatible local servers
                 (LM Studio, Ollama, vLLM, Together, etc.) work by pointing
-                that URL at the server's /v1 endpoint.
+                that URL at the server's /v1 endpoint. Reasoning-family
+                models (gpt-5.x, o-series) are sent the reasoning-model
+                parameter surface (reasoning_effort via
+                cfg.openai_reasoning_effort / OPENAI_REASONING_EFFORT,
+                max_completion_tokens, no temperature); other models keep
+                the historical wire format byte-for-byte.
 
 Each judge sample returns:
     {"verdict": "pass" | "flag", "insufficient_context": bool, "reason": str,
@@ -135,6 +140,7 @@ class JudgeOutcome:
         totals = {
             "input_tokens": 0,
             "output_tokens": 0,
+            "reasoning_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0,
             "samples_with_usage": 0,
@@ -143,7 +149,7 @@ class JudgeOutcome:
             if not s.usage:
                 continue
             totals["samples_with_usage"] += 1
-            for field in ("input_tokens", "output_tokens",
+            for field in ("input_tokens", "output_tokens", "reasoning_tokens",
                           "cache_read_input_tokens", "cache_creation_input_tokens"):
                 totals[field] += int(s.usage.get(field) or 0)
         return totals
@@ -217,6 +223,30 @@ def _err(reason: str) -> dict:
     return {"verdict": "error", "insufficient_context": False, "reason": reason}
 
 
+# OpenAI's reasoning family (gpt-5.x, o-series) takes a different parameter
+# surface on chat completions, verified live against gpt-5.5 on 2026-07-06:
+# max_tokens is rejected (use max_completion_tokens), any non-default
+# temperature is rejected, and thinking depth is set via reasoning_effort.
+_REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+# Reasoning tokens bill as completion tokens and count against the cap. The
+# 400-token budget that fits the JSON verdict on non-reasoning models can be
+# consumed entirely by thinking on a hard statement, returning an empty
+# message — reasoning models get a much larger cap instead.
+_REASONING_MAX_COMPLETION_TOKENS = 4000
+
+# High-effort reasoning regularly exceeds the 30s default timeout on hard
+# statements (4/25 timed out in the 2026-07-06 stage-3 revalidation).
+# Timeouts become error votes, and systematic errors break quorum into
+# defer — so the reasoning branch floors the timeout instead. An explicit
+# cfg.judge_timeout_s above the floor is still honoured.
+_REASONING_MIN_TIMEOUT_S = 120.0
+
+
+def _is_reasoning_model(model: str) -> bool:
+    return model.lower().startswith(_REASONING_MODEL_PREFIXES)
+
+
 def _extract_anthropic_usage(msg) -> dict:
     """Pull a normalized usage dict from an Anthropic SDK Message."""
     usage = getattr(msg, "usage", None)
@@ -243,6 +273,12 @@ def _extract_openai_usage(payload: dict) -> dict:
         out["input_tokens"] = usage["prompt_tokens"]
     if "completion_tokens" in usage:
         out["output_tokens"] = usage["completion_tokens"]
+    # Reasoning models report thinking spend under completion_tokens_details;
+    # it is already included in completion_tokens but recorded separately so
+    # cost audits can see where the output budget went.
+    details = usage.get("completion_tokens_details") or {}
+    if details.get("reasoning_tokens"):
+        out["reasoning_tokens"] = details["reasoning_tokens"]
     return out
 
 
@@ -287,15 +323,25 @@ def _call_openai_once(cfg: WellposedConfig, prompt: str) -> dict:
         return _err("no openai api key")
     base = cfg.openai_base_url.rstrip("/")
     url = f"{base}/chat/completions"
-    body = json.dumps({
-        "model": cfg.resolve_model(),
+    model = cfg.resolve_model()
+    payload_dict = {
+        "model": model,
         "messages": [
             {"role": "system", "content": JUDGE_SYSTEM},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 400,
-        "temperature": 1.0,
-    }).encode("utf-8")
+    }
+    timeout_s = cfg.judge_timeout_s
+    if _is_reasoning_model(model):
+        payload_dict["max_completion_tokens"] = _REASONING_MAX_COMPLETION_TOKENS
+        payload_dict["reasoning_effort"] = cfg.openai_reasoning_effort
+        timeout_s = max(timeout_s, _REASONING_MIN_TIMEOUT_S)
+    else:
+        # Wire format kept byte-identical for non-reasoning models so requests
+        # (and the disk caches keyed on provider/model/prompt) are unchanged.
+        payload_dict["max_tokens"] = 400
+        payload_dict["temperature"] = 1.0
+    body = json.dumps(payload_dict).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=body,
@@ -307,7 +353,7 @@ def _call_openai_once(cfg: WellposedConfig, prompt: str) -> dict:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=cfg.judge_timeout_s) as resp:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         try:

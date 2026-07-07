@@ -48,6 +48,12 @@ class WellposedConfig:
     openai_base_url: str = field(
         default_factory=lambda: os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
     )
+    # Thinking depth for OpenAI reasoning-family models (gpt-5.x, o-series).
+    # Ignored for non-reasoning models, which keep their historical wire
+    # format byte-for-byte.
+    openai_reasoning_effort: str = field(
+        default_factory=lambda: os.environ.get("OPENAI_REASONING_EFFORT") or "high"
+    )
 
     # Cache
     judge_cache_path: Optional[str] = None

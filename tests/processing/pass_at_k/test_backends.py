@@ -211,7 +211,24 @@ def test_openai_non_reasoning_models_forward_temperature(monkeypatch):
     out = backend.call("q", k=2, temperature=0.3, max_tokens=256, think=False, timeout=30.0)
     assert out == ["x", "y"]
     assert all(c["temperature"] == 0.3 for c in fake.calls)
+    assert all(c["max_tokens"] == 256 for c in fake.calls)
+    assert all("max_completion_tokens" not in c for c in fake.calls)
     assert backend.usage() == {"input_tokens": 22, "output_tokens": 8}
+
+
+def test_openai_reasoning_models_use_max_completion_tokens(monkeypatch):
+    """gpt-5.x / o-series reject both temperature and the legacy max_tokens
+    parameter; the cap must travel as max_completion_tokens instead."""
+    for model in ("gpt-5.5", "o3-mini"):
+        fake = _fake_openai_module([_openai_response("\\boxed{1}")])
+        monkeypatch.setitem(sys.modules, "openai", fake)
+        backend = OpenAIBackend(model=model, api_key="sk-test")
+        out = backend.call("q", k=1, temperature=0.7, max_tokens=256, think=False, timeout=30.0)
+        assert out == ["\\boxed{1}"]
+        kwargs = fake.calls[0]
+        assert kwargs["max_completion_tokens"] == 256, model
+        assert "max_tokens" not in kwargs, model
+        assert "temperature" not in kwargs, model
 
 
 # --- build_backend ------------------------------------------------------------
