@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://www.openarchives.org/OAI/2.0/
+                             http://www.openarchives.org/OAI/2.0/OAI-PMH.xsd">
+  <responseDate>2026-07-06T00:00:00Z</responseDate>
+  <request verb="ListRecords" resumptionToken="token-page-2-abc123">
+    https://oaipmh.arxiv.org/oai
+  </request>
+  <ListRecords>
+
+    <record>
+      <header>
+        <identifier>oai:arXiv.org:2502.00111</identifier>
+        <datestamp>2025-02-03</datestamp>
+        <setSpec>math</setSpec>
+      </header>
+      <metadata>
+        <arXiv xmlns="http://arxiv.org/OAI/arXiv/"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:schemaLocation="http://arxiv.org/OAI/arXiv/
+                                   http://arxiv.org/OAI/arXiv.xsd">
+          <id>2502.00111</id>
+          <created>2025-02-03</created>
+          <updated>2025-02-03</updated>
+          <authors><author><keyname>Patel</keyname><forenames>Eve</forenames></author></authors>
+          <title>Well-posedness of   parabolic   equations in weighted spaces</title>
+          <categories>math.AP cs.LG</categories>
+          <abstract>We establish well-posedness results.</abstract>
+        </arXiv>
+      </metadata>
+    </record>
+
+    <record>
+      <header>
+        <identifier>oai:arXiv.org:2502.00222</identifier>
+        <datestamp>2025-02-05</datestamp>
+        <setSpec>math</setSpec>
+      </header>
+      <metadata>
+        <arXiv xmlns="http://arxiv.org/OAI/arXiv/"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:schemaLocation="http://arxiv.org/OAI/arXiv/
+                                   http://arxiv.org/OAI/arXiv.xsd">
+          <id>2502.00222</id>
+          <created>2025-02-05</created>
+          <updated>2025-02-05</updated>
+          <authors><author><keyname>Kim</keyname><forenames>Frank</forenames></author></authors>
+          <title>Operator semigroups   and   abstract Cauchy problems</title>
+          <categories>math.FA math.AP</categories>
+          <abstract>Semigroup approach to abstract Cauchy problems.</abstract>
+        </arXiv>
+      </metadata>
+    </record>
+
+    <record>
+      <header>
+        <identifier>oai:arXiv.org:2502.00333</identifier>
+        <datestamp>2025-02-07</datestamp>
+        <setSpec>cs</setSpec>
+      </header>
+      <metadata>
+        <arXiv xmlns="http://arxiv.org/OAI/arXiv/"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:schemaLocation="http://arxiv.org/OAI/arXiv/
+                                   http://arxiv.org/OAI/arXiv.xsd">
+          <id>2502.00333</id>
+          <created>2025-02-07</created>
+          <updated>2025-02-07</updated>
+          <authors><author><keyname>Wang</keyname><forenames>Grace</forenames></author></authors>
+          <title>Graph neural networks for  combinatorial  optimization</title>
+          <categories>cs.LG cs.AI</categories>
+          <abstract>GNN approaches to combinatorial optimization.</abstract>
+        </arXiv>
+      </metadata>
+    </record>
+
+    <record>
+      <header>
+        <identifier>oai:arXiv.org:2502.00444</identifier>
+        <datestamp>2025-02-09</datestamp>
+        <setSpec>math</setSpec>
+      </header>
+      <metadata>
+        <arXiv xmlns="http://arxiv.org/OAI/arXiv/"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:schemaLocation="http://arxiv.org/OAI/arXiv/
+                                   http://arxiv.org/OAI/arXiv.xsd">
+          <id>2502.00444</id>
+          <created>2025-02-09</created>
+          <updated>2025-02-09</updated>
+          <authors><author><keyname>Hassan</keyname><forenames>Ivan</forenames></author></authors>
+          <title>Interpolation  theory  in  function  spaces</title>
+          <categories>math.FA</categories>
+          <abstract>Interpolation methods in abstract function spaces.</abstract>
+        </arXiv>
+      </metadata>
+    </record>
+
+    <record>
+      <header>
+        <identifier>oai:arXiv.org:2502.00555</identifier>
+        <datestamp>2025-02-11</datestamp>
+        <setSpec>cs</setSpec>
+      </header>
+      <metadata>
+        <arXiv xmlns="http://arxiv.org/OAI/arXiv/"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:schemaLocation="http://arxiv.org/OAI/arXiv/
+                                   http://arxiv.org/OAI/arXiv.xsd">
+          <id>2502.00555</id>
+          <created>2025-02-11</created>
+          <updated>2025-02-11</updated>
+          <authors><author><keyname>Liu</keyname><forenames>Jing</forenames></author></authors>
+          <title>Contrastive  self-supervised   learning   for  tabular  data</title>
+          <categories>cs.LG cs.AI math.FA</categories>
+          <abstract>Self-supervised methods for tabular datasets.</abstract>
+        </arXiv>
+      </metadata>
+    </record>
+
+    <record>
+      <header>
+        <identifier>oai:arXiv.org:2502.00666</identifier>
+        <datestamp>2025-02-13</datestamp>
+        <setSpec>math</setSpec>
+      </header>
+      <metadata>
+        <arXiv xmlns="http://arxiv.org/OAI/arXiv/"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:schemaLocation="http://arxiv.org/OAI/arXiv/
+                                   http://arxiv.org/OAI/arXiv.xsd">
+          <id>2502.00666</id>
+          <created>2025-02-13</created>
+          <updated>2025-02-13</updated>
+          <authors><author><keyname>Russo</keyname><forenames>Karl</forenames></author></authors>
+          <title>Boundary value problems for   fractional  differential equations</title>
+          <categories>math.AP math.FA cs.LG</categories>
+          <abstract>Boundary value problems for fractional operators.</abstract>
+        </arXiv>
+      </metadata>
+    </record>
+
+    <!-- empty resumptionToken terminates paging -->
+    <resumptionToken cursor="10" completeListSize="10"></resumptionToken>
+  </ListRecords>
+</OAI-PMH>

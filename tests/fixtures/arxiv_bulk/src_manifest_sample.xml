@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Assumed wrapper: <arXivSRC>, matching the pattern of arXiv's OAI
+  manifest files.  The real arXiv_src_manifest.xml uses this root element
+  name (to be confirmed against the live file at gate W4; orchestrator
+  validates this assumption before production use).
+
+  Each <file> child has exactly ten fields in this order:
+    filename, yymm, seq_num, first_item, last_item, num_items,
+    size, md5sum, content_md5sum, timestamp
+
+  Months represented: 2412 (1 chunk), 2501 (2 chunks), 2502 (1 chunk),
+  2503 (1 chunk), 2506 (1 chunk).  Six entries total, spanning five months
+  across two calendar years, with 2501 providing the two-chunks-same-month
+  case.  Size values are realistic (~500 MB each).
+-->
+<arXivSRC>
+  <file>
+    <filename>src/arXiv_src_2412_001.tar</filename>
+    <yymm>2412</yymm>
+    <seq_num>1</seq_num>
+    <first_item>2412.00001</first_item>
+    <last_item>2412.08754</last_item>
+    <num_items>8754</num_items>
+    <size>498234567</size>
+    <md5sum>a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6</md5sum>
+    <content_md5sum>b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7</content_md5sum>
+    <timestamp>2025-01-03 08:15:22</timestamp>
+  </file>
+  <file>
+    <filename>src/arXiv_src_2501_001.tar</filename>
+    <yymm>2501</yymm>
+    <seq_num>1</seq_num>
+    <first_item>2501.00001</first_item>
+    <last_item>2501.09999</last_item>
+    <num_items>9999</num_items>
+    <size>511345678</size>
+    <md5sum>c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8</md5sum>
+    <content_md5sum>d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9</content_md5sum>
+    <timestamp>2025-02-04 09:22:11</timestamp>
+  </file>
+  <file>
+    <filename>src/arXiv_src_2501_002.tar</filename>
+    <yymm>2501</yymm>
+    <seq_num>2</seq_num>
+    <first_item>2501.10000</first_item>
+    <last_item>2501.18442</last_item>
+    <num_items>8443</num_items>
+    <size>489012345</size>
+    <md5sum>e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0</md5sum>
+    <content_md5sum>f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1</content_md5sum>
+    <timestamp>2025-02-04 09:45:00</timestamp>
+  </file>
+  <file>
+    <filename>src/arXiv_src_2502_001.tar</filename>
+    <yymm>2502</yymm>
+    <seq_num>1</seq_num>
+    <first_item>2502.00001</first_item>
+    <last_item>2502.10211</last_item>
+    <num_items>10211</num_items>
+    <size>523456789</size>
+    <md5sum>a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4</md5sum>
+    <content_md5sum>b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5</content_md5sum>
+    <timestamp>2025-03-05 11:30:45</timestamp>
+  </file>
+  <file>
+    <filename>src/arXiv_src_2503_001.tar</filename>
+    <yymm>2503</yymm>
+    <seq_num>1</seq_num>
+    <first_item>2503.00001</first_item>
+    <last_item>2503.11887</last_item>
+    <num_items>11887</num_items>
+    <size>537890123</size>
+    <md5sum>c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6</md5sum>
+    <content_md5sum>d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7</content_md5sum>
+    <timestamp>2025-04-03 10:05:33</timestamp>
+  </file>
+  <file>
+    <filename>src/arXiv_src_2506_001.tar</filename>
+    <yymm>2506</yymm>
+    <seq_num>1</seq_num>
+    <first_item>2506.00001</first_item>
+    <last_item>2506.13002</last_item>
+    <num_items>13002</num_items>
+    <size>551234567</size>
+    <md5sum>e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8</md5sum>
+    <content_md5sum>f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9</content_md5sum>
+    <timestamp>2025-07-02 14:20:09</timestamp>
+  </file>
+</arXivSRC>

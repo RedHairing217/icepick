@@ -47,7 +47,7 @@ from icepick.processing.poser import (
     parse_stages,
     run_cascade,
 )
-from icepick.allocation.adapters import realmath_scrape
+from icepick.allocation.adapters import arxiv_bulk, realmath_scrape
 from icepick.allocation.intake import mount as allocation_mount
 from icepick.allocation.manifests import (
     load_manifest,
@@ -59,6 +59,7 @@ from icepick.allocation.manifests import (
 from icepick.contracts.manifests import (
     MODE_FLOW_TESTING,
     MODE_PRODUCTION,
+    SOURCE_ARXIV_BULK,
     SOURCE_REALMATH_SCRAPE,
     ApprovedManifest,
 )
@@ -690,8 +691,10 @@ def _build_allocation(sub) -> None:
     p.add_argument(
         "--source-type",
         required=True,
-        choices=(SOURCE_REALMATH_SCRAPE,),
-        help="Which acquisition adapter to plan against. Only realmath_scrape today.",
+        choices=(SOURCE_REALMATH_SCRAPE, SOURCE_ARXIV_BULK),
+        help="Which acquisition adapter to plan against: realmath_scrape (live arXiv "
+        "API scrape) or arxiv_bulk (offline S3 bulk chunks; production plans need "
+        "--manifest-path).",
     )
     p.add_argument("--source", required=True, help="Source name stamped on the plan and downstream records.")
     p.add_argument("--target-count", type=int, required=True, help="Target handoff record count.")
@@ -744,7 +747,15 @@ def _build_allocation(sub) -> None:
         default=None,
         help="Candidate depth: 'abstract' (default, one metadata candidate per paper), "
         "'latex' (mine theorem statements from the e-print source), or 'qa' (LLM turns each "
-        "theorem into a verifiable question+answer; production needs ANTHROPIC_API_KEY).",
+        "theorem into a verifiable question+answer; production needs ANTHROPIC_API_KEY). "
+        "arxiv_bulk supports 'latex' and 'qa' only.",
+    )
+    p.add_argument(
+        "--manifest-path",
+        default=None,
+        help="Local path to a pre-fetched arXiv_src_manifest.xml (arxiv_bulk only; "
+        "required for its production plans). Recorded on scrape_window; runs parse "
+        "it locally and never fetch it.",
     )
     p.add_argument(
         "--auto-approve",
@@ -1213,6 +1224,7 @@ def _run_allocation_mount(args) -> int:
 
 _SOURCE_TYPE_ADAPTERS = {
     SOURCE_REALMATH_SCRAPE: realmath_scrape,
+    SOURCE_ARXIV_BULK: arxiv_bulk,
 }
 
 
@@ -1492,6 +1504,8 @@ def _scrape_window_from_args(args) -> Optional[dict]:
         window["primary_only"] = True
     if args.extraction:
         window["extraction"] = args.extraction
+    if getattr(args, "manifest_path", None):
+        window["manifest_path"] = args.manifest_path
     if getattr(args, "exclude_from_run", None):
         exclude = _exclude_ids_from_runs(args.exclude_from_run)
         if exclude:

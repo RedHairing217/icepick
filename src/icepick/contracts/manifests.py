@@ -24,11 +24,13 @@ from typing import Optional
 
 SOURCE_GENERATED = "generated"
 SOURCE_REALMATH_SCRAPE = "realmath_scrape"
+SOURCE_ARXIV_BULK = "arxiv_bulk"
 SOURCE_EXTERNAL_JSONL = "external_jsonl"
 SOURCE_MANUAL_MOUNT = "manual_mount"
 SOURCE_TYPES = (
     SOURCE_GENERATED,
     SOURCE_REALMATH_SCRAPE,
+    SOURCE_ARXIV_BULK,
     SOURCE_EXTERNAL_JSONL,
     SOURCE_MANUAL_MOUNT,
 )
@@ -88,7 +90,7 @@ class ApprovedManifest:
     approval_notes: str = ""
 
     def requires_calls(self) -> bool:
-        return self.source_type in {SOURCE_GENERATED, SOURCE_REALMATH_SCRAPE}
+        return self.source_type in {SOURCE_GENERATED, SOURCE_REALMATH_SCRAPE, SOURCE_ARXIV_BULK}
 
     def is_approved(self) -> bool:
         return bool(self.approved_by) and bool(self.approved_at)

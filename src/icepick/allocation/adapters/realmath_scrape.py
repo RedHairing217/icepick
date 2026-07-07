@@ -191,7 +191,7 @@ def plan(request):
     target_count = request["target_count"]
     if not isinstance(target_count, int) or isinstance(target_count, bool) or target_count <= 0:
         raise ValueError(f"target_count must be a positive integer, got {target_count!r}")
-    scrape_window = _validated_scrape_window(request.get("scrape_window"))
+    scrape_window = validated_scrape_window(request.get("scrape_window"))
 
     notes = str(request.get("notes") or "")
     fixture_path = request.get("fixture_path")
@@ -272,10 +272,10 @@ def run(manifest, *, now: Optional[datetime] = None):
     raw candidates through the same normalise + run-layout writer.
     """
     _validate_manifest(manifest)
-    run_dir = _run_dir(manifest)
+    run_dir = run_dir_for(manifest)
     if manifest.processor_mode == MODE_FLOW_TESTING:
-        candidates = _read_fixture_candidates(manifest, run_dir)
-        return _write_run(manifest, run_dir, candidates, calibration_replay=True, now=now)
+        candidates = read_fixture_candidates(manifest, run_dir)
+        return write_run(manifest, run_dir, candidates, calibration_replay=True, now=now)
     scrape_result, checkpoint = _scrape_candidates(manifest, run_dir)
     acquisition = {
         "arxiv_queries": scrape_result.queries,
@@ -294,7 +294,7 @@ def run(manifest, *, now: Optional[datetime] = None):
         "call_budget": manifest.call_budget,
         "resumed_papers": scrape_result.resumed_papers,
     }
-    outcome = _write_run(
+    outcome = write_run(
         manifest,
         run_dir,
         scrape_result.candidates,
@@ -413,7 +413,7 @@ def _validate_manifest(manifest) -> None:
         raise ValueError("flow_testing requires calibration_sheet (the local fixture path)")
 
 
-def _run_dir(manifest) -> Path:
+def run_dir_for(manifest) -> Path:
     output_dir = Path(manifest.output_dir)
     run_dir = output_dir / "runs" / manifest.run_id
     resolved = run_dir.resolve()
@@ -451,7 +451,7 @@ def _estimated_calls(target_count: int, extraction: str = "abstract") -> int:
 # --- run execution (shared by flow_testing replay and production scrape) ------
 
 
-def _read_fixture_candidates(manifest, run_dir: Path) -> list:
+def read_fixture_candidates(manifest, run_dir: Path) -> list:
     """Load flow-testing candidate rows from the manifest's fixture."""
     fixture = Path(manifest.calibration_sheet)
     if not fixture.is_file():
@@ -485,7 +485,7 @@ def _scrape_candidates(manifest, run_dir: Path) -> tuple:
     return result, checkpoint
 
 
-def _write_run(
+def write_run(
     manifest,
     run_dir: Path,
     candidates: list,
@@ -496,9 +496,15 @@ def _write_run(
     interrupted: bool = False,
     progress_dir: Optional[Path] = None,
     surplus: Optional[list] = None,
+    report_title: Optional[str] = None,
     now: Optional[datetime] = None,
 ) -> ScrapeRunResult:
-    """Normalise candidates and write the full run layout. Shared by both modes."""
+    """Normalise candidates and write the full run layout.
+
+    Shared by both realmath modes and — public seam since F2 — by sibling
+    source adapters (arxiv_bulk); keep the signature stable. ``report_title``
+    lets a sibling stamp an honest heading; None keeps realmath's.
+    """
     now = now or datetime.now(timezone.utc)
     papers, duplicate_titles = _paper_pool(candidates)
     result = normalise(
@@ -604,7 +610,10 @@ def _write_run(
         surplus_count=len(surplus_records),
         surplus_path=surplus_path if surplus_records else None,
     )
-    _write_report(outcome, result, quarantined_rows=quarantined_rows, created_at=now)
+    _write_report(
+        outcome, result, quarantined_rows=quarantined_rows, created_at=now,
+        report_title=report_title,
+    )
     return outcome
 
 
@@ -770,7 +779,7 @@ def _first_str(row: dict, keys) -> str:
     return ""
 
 
-def _validated_scrape_window(window) -> Optional[dict]:
+def validated_scrape_window(window) -> Optional[dict]:
     if window is None:
         return None
     if not isinstance(window, dict):
@@ -818,6 +827,7 @@ def _write_report(
     *,
     quarantined_rows: Optional[list] = None,
     created_at: datetime,
+    report_title: Optional[str] = None,
 ) -> Path:
     """Markdown source report: outcome first, then counts, warnings, drops.
 
@@ -835,7 +845,7 @@ def _write_report(
     )
 
     lines = [
-        "# RealMath scrape source report",
+        f"# {report_title or 'RealMath scrape source report'}",
         "",
         f"Wrote **{outcome.record_count}** handoff records for source `{outcome.source_name}`.",
         f"Feed processing from: `{outcome.handoff_path}`",
@@ -889,14 +899,22 @@ def _write_report(
     if outcome.acquisition:
         acq = outcome.acquisition
         budget = acq.get("call_budget")
+        # Adapters whose call kinds differ from realmath's pass explicit
+        # ``spend_rows`` [(kind, count), ...]; the realmath kinds are the fallback.
+        spend_rows = acq.get("spend_rows") or [
+            ("arxiv_query", acq.get("arxiv_queries", 0)),
+            ("latex_source_fetch", acq.get("latex_fetches", 0)),
+            (
+                f"qa_generation ({acq.get('qa_model') or 'model unrecorded'})",
+                acq.get("qa_calls", 0),
+            ),
+        ]
         lines += [
             "## Spend (acquisition calls)",
             "",
             "| kind | count |",
             "| --- | --- |",
-            f"| arxiv_query | {acq.get('arxiv_queries', 0)} |",
-            f"| latex_source_fetch | {acq.get('latex_fetches', 0)} |",
-            f"| qa_generation ({acq.get('qa_model') or 'model unrecorded'}) | {acq.get('qa_calls', 0)} |",
+            *(f"| {kind} | {count} |" for kind, count in spend_rows),
             f"| total | {acq.get('total_calls', 0)}"
             + (f" / {budget} budgeted" if budget is not None else "") + " |",
             "",

@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://www.openarchives.org/OAI/2.0/
+                             http://www.openarchives.org/OAI/2.0/OAI-PMH.xsd">
+  <responseDate>2026-07-06T00:00:00Z</responseDate>
+  <request verb="ListRecords" metadataPrefix="arXiv" set="math">
+    https://oaipmh.arxiv.org/oai
+  </request>
+  <ListRecords>
+
+    <record>
+      <header>
+        <identifier>oai:arXiv.org:2501.00101</identifier>
+        <datestamp>2025-01-05</datestamp>
+        <setSpec>math</setSpec>
+      </header>
+      <metadata>
+        <arXiv xmlns="http://arxiv.org/OAI/arXiv/"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:schemaLocation="http://arxiv.org/OAI/arXiv/
+                                   http://arxiv.org/OAI/arXiv.xsd">
+          <id>2501.00101</id>
+          <created>2025-01-05</created>
+          <updated>2025-01-05</updated>
+          <authors><author><keyname>Smith</keyname><forenames>Alice</forenames></author></authors>
+          <title>Regularity of  solutions   to the Navier-Stokes equations</title>
+          <categories>math.AP math.FA</categories>
+          <abstract>We study regularity of weak solutions.</abstract>
+        </arXiv>
+      </metadata>
+    </record>
+
+    <record>
+      <header>
+        <identifier>oai:arXiv.org:2501.00202</identifier>
+        <datestamp>2025-01-08</datestamp>
+        <setSpec>math</setSpec>
+      </header>
+      <metadata>
+        <arXiv xmlns="http://arxiv.org/OAI/arXiv/"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:schemaLocation="http://arxiv.org/OAI/arXiv/
+                                   http://arxiv.org/OAI/arXiv.xsd">
+          <id>2501.00202</id>
+          <created>2025-01-08</created>
+          <updated>2025-01-08</updated>
+          <authors><author><keyname>Jones</keyname><forenames>Bob</forenames></author></authors>
+          <title>Functional calculus   in   Banach spaces</title>
+          <categories>math.FA math.AP</categories>
+          <abstract>Functional calculus methods in Banach spaces.</abstract>
+        </arXiv>
+      </metadata>
+    </record>
+
+    <record>
+      <header>
+        <identifier>oai:arXiv.org:2501.00303</identifier>
+        <datestamp>2025-01-10</datestamp>
+        <setSpec>cs</setSpec>
+      </header>
+      <metadata>
+        <arXiv xmlns="http://arxiv.org/OAI/arXiv/"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:schemaLocation="http://arxiv.org/OAI/arXiv/
+                                   http://arxiv.org/OAI/arXiv.xsd">
+          <id>2501.00303</id>
+          <created>2025-01-10</created>
+          <updated>2025-01-10</updated>
+          <authors><author><keyname>Lee</keyname><forenames>Carol</forenames></author></authors>
+          <title>Deep learning generalization  bounds</title>
+          <categories>cs.LG math.FA</categories>
+          <abstract>We derive generalization bounds for deep nets.</abstract>
+        </arXiv>
+      </metadata>
+    </record>
+
+    <record>
+      <header>
+        <identifier>oai:arXiv.org:2501.00404</identifier>
+        <datestamp>2025-01-12</datestamp>
+        <setSpec>math</setSpec>
+      </header>
+      <metadata>
+        <arXiv xmlns="http://arxiv.org/OAI/arXiv/"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:schemaLocation="http://arxiv.org/OAI/arXiv/
+                                   http://arxiv.org/OAI/arXiv.xsd">
+          <id>2501.00404</id>
+          <created>2025-01-12</created>
+          <updated>2025-01-12</updated>
+          <authors><author><keyname>Nguyen</keyname><forenames>Dan</forenames></author></authors>
+          <title>Spectral  theory   of elliptic operators</title>
+          <categories>math.AP</categories>
+          <abstract>Spectral theory results for elliptic operators.</abstract>
+        </arXiv>
+      </metadata>
+    </record>
+
+    <resumptionToken cursor="4" completeListSize="10">token-page-2-abc123</resumptionToken>
+  </ListRecords>
+</OAI-PMH>
