@@ -25,6 +25,33 @@ _CONTEXT_PHRASES = re.compile(
 )
 _LATEX_EQUATION_NUMBER = re.compile(r"\((?:\d+(?:\.\d+)*|[A-Za-z])\)")
 
+# --- context/degeneracy lint patterns (advisory-only; see context_lint_hits) ---
+_MISSING_CONTEXT_PHRASES = re.compile(
+    r"\b("
+    r"a system|an ODE|a PDE|the equation|the stated assumptions|"
+    r"as in Lemma|as in Proposition|as specified|"
+    r"appropriate conditions|suitable conditions"
+    r")\b",
+    re.IGNORECASE,
+)
+_SOURCE_LOCAL_PHRASES = re.compile(
+    r"\b(using the notation|defined above|as before)\b",
+    re.IGNORECASE,
+)
+_SYMBOL_TOKEN = r"[A-Za-z\\][A-Za-z0-9_\\']*"
+_SYMBOL_DEFINITION = re.compile(
+    r"\blet\s+(?P<let_sym>" + _SYMBOL_TOKEN + r")\s+denote"
+    r"|\bdefine\s+(?P<def_sym>" + _SYMBOL_TOKEN + r")\b"
+    r"|(?P<eq_sym>" + _SYMBOL_TOKEN + r")\s*:=",
+    re.IGNORECASE,
+)
+_SYMBOL_ASK = re.compile(
+    r"\b(?:find|compute|determine|what\s+is|evaluate)\b[^.?!\n]{0,60}?"
+    r"\b(?P<sym>" + _SYMBOL_TOKEN + r")\b",
+    re.IGNORECASE,
+)
+_WHITESPACE = re.compile(r"\s+")
+
 SCORE_BY_STATUS = {
     PASS: 1.0,
     FLAG: 0.0,
@@ -50,11 +77,121 @@ _PROMPT = (
 )
 
 
+# Rubric v2: opt in via --judge-rubric-version v2 (score_record rubric_version
+# kwarg). v1 above is the billed cache-key default and must stay untouched.
+_PROMPT_V2 = """You audit a mathematics problem for well-posedness.
+
+Use only the final Statement below. Do not rely on the source paper, the title, or memory of a
+canonical theorem. The stored answer is a claim to verify against the statement.
+
+A problem is well-posed only when a strong mathematician, given the statement alone, can derive
+the stored answer uniquely up to equivalent form.
+
+Attempt the derivation. The stored answer is a claim to verify: flag unless the statement as
+written forces it uniquely (up to equivalent form). Knowing the intended theorem is not
+evidence — a recalled or canonical answer that the statement does not force is exactly the
+failure mode you are auditing for. Do not supply missing context from memory: if the derivation
+needs an equation, hypothesis, normalization, convention, or definition the statement does not
+contain, that is a flag, not a gap for you to fill.
+
+Flag the problem when any of these hold:
+- an equation, object, hypothesis, convention, normalization, or symbol needed for the answer is
+  missing or paper-local;
+- more than one non-equivalent answer could satisfy the question;
+- the question asks for a sharp, optimal, exact, largest, smallest, or canonical value but the
+  statement only gives an existence claim or a bound;
+- the stored answer is merely defined or displayed in the statement and the item is
+  transcription/definition recall rather than a mathematical task;
+- the stored answer contradicts the literal statement, even if it resembles a known theorem.
+
+These are NOT flags: difficulty; advanced but field-standard terminology or notation (an object
+a strong mathematician can define and use without the paper — e.g. a classical named operator —
+is standard even if this statement does not define it); an answer given in one of several
+equivalent forms.
+
+Statement:
+{statement}
+
+Stored answer:
+{truth}
+
+Pass@k context:
+{passk_context}
+
+Soft context signals from code:
+{soft_context}
+
+Reply with a JSON object only, keys: determined (true or false), insufficient_context (true or
+false), reason (one sentence), confidence (0 to 1)."""
+
+
+# Rubric v3: opt in via --judge-rubric-version v3. Bounded-sketch redesign after
+# v2 failed the sentinel hard gate 4/7 (execution_validation_20260711T060641Z):
+# flag only on a NAMEABLE missing ingredient; standardness is an executable
+# self-test; replies stay JSON-only by instruction (v2's derivation prose
+# truncated at the judge token cap).
+_PROMPT_V3 = """You audit a mathematics problem for well-posedness.
+
+Use only the final Statement below. Do not rely on the source paper, the title, or memory of a
+canonical theorem. The stored answer is a claim to verify against the statement.
+
+A problem is well-posed only when the statement alone forces the stored answer uniquely (up to
+equivalent form). Knowing the intended theorem is not evidence — a recalled or canonical answer
+that the statement does not force is exactly the failure mode you are auditing for.
+
+Sketch — do not write out — the derivation that would take a strong mathematician from the
+statement to the stored answer: identify the ingredients that pin the answer down (equations,
+hypotheses, conventions, normalizations, definitions). Difficulty is not the test; a long or
+hard derivation whose ingredients are all present is well-posed.
+
+An ingredient does not count as missing when it is standard: a strong mathematician could write
+its definition from the name alone, without this paper. Classical named operators (e.g. the
+fractional Laplacian, a Laplace-Beltrami operator), standard weak or variational formulations,
+and field-standard conventions and scalings are standard even when this statement does not
+define them. If you can supply the definition yourself, supply it and continue the sketch.
+
+Flag the problem only when you can NAME a specific missing ingredient or a specific defect, in
+one of these forms:
+- an equation, object, hypothesis, convention, normalization, or definition that the derivation
+  needs, that the statement does not contain, and that is paper-local rather than standard;
+- more than one non-equivalent answer satisfies the question as posed (name the second reading);
+- the question asks for a sharp, optimal, exact, largest, smallest, or canonical value but the
+  statement only supports an existence claim or a one-sided bound;
+- the stored answer is merely restated or displayed in the statement (transcription or
+  definition recall, not a mathematical task);
+- the stored answer contradicts the literal statement.
+If you cannot name the missing ingredient or defect, do not flag.
+
+These are NOT flags: difficulty or length of the derivation; advanced but standard terminology
+or notation; an answer given in one of several equivalent forms.
+
+Statement:
+{statement}
+
+Stored answer:
+{truth}
+
+Pass@k context:
+{passk_context}
+
+Soft context signals from code:
+{soft_context}
+
+Set insufficient_context to true only when the named missing ingredient is context the source
+paper had and this statement dropped. Reply with a single JSON object only — no derivation text,
+no markdown, keys: determined (true or false), insufficient_context (true or false), reason (one
+sentence naming the missing ingredient or defect, or the ingredients that force the answer),
+confidence (0 to 1)."""
+
+
 def score_records(
     records: Iterable[PassKRecord],
     judge: Callable[[str], str] | None = None,
     judge_samples: int = 3,
     judge_uphold: int = 2,
+    *,
+    rubric_version: str = "v1",
+    context_lint_mode: str = "off",
 ) -> list[tuple[PassKRecord, WellPosednessResult]]:
     return [
         (
@@ -64,6 +201,8 @@ def score_records(
                 judge=judge,
                 judge_samples=judge_samples,
                 judge_uphold=judge_uphold,
+                rubric_version=rubric_version,
+                context_lint_mode=context_lint_mode,
             ),
         )
         for record in records
@@ -75,6 +214,9 @@ def score_record(
     judge: Callable[[str], str] | None = None,
     judge_samples: int = 3,
     judge_uphold: int = 2,
+    *,
+    rubric_version: str = "v1",
+    context_lint_mode: str = "off",
 ) -> WellPosednessResult:
     """Score one record under the isolated c01 contract."""
 
@@ -96,6 +238,14 @@ def score_record(
         "soft_context": soft_context,
         "passk_context": passk_warnings,
     }
+    if context_lint_mode == "advisory":
+        # Computed once, attached to the shared ``signals`` dict so every
+        # exit path below (including the judge path's copy) carries it.
+        truth_text = record.truth_strings[0] if record.truth_strings else ""
+        signals["context_lint"] = {
+            "mode": "advisory",
+            **context_lint_hits(statement, truth_text),
+        }
 
     if structural:
         kinds = ", ".join(f"{name} x{count}" for name, count in structural.items())
@@ -126,6 +276,7 @@ def score_record(
             signals=signals,
             samples=judge_samples,
             uphold=judge_uphold,
+            rubric_version=rubric_version,
         )
 
     detail = "semantic residue requires judge or review"
@@ -146,10 +297,18 @@ def judge_residue(
     signals: dict,
     samples: int,
     uphold: int,
+    *,
+    rubric_version: str = "v1",
 ) -> WellPosednessResult:
     samples = max(1, samples)
     uphold = max(1, min(uphold, samples))
-    prompt = _PROMPT.format(
+    if rubric_version == "v2":
+        template = _PROMPT_V2
+    elif rubric_version == "v3":
+        template = _PROMPT_V3
+    else:
+        template = _PROMPT
+    prompt = template.format(
         statement=record.statement,
         truth=record.truth_strings[0] if record.truth_strings else "",
         passk_context=json.dumps(
@@ -198,6 +357,7 @@ def judge_residue(
     insufficient_context_votes = sum(1 for row in parsed if bool(row.get("insufficient_context")))
     ill_posed = [row for row in parsed if not bool(row.get("determined"))]
     judge_signals["judge"] = {
+        "rubric_version": rubric_version,
         "samples_requested": samples,
         "samples_parsed": len(parsed),
         "uphold": uphold,
@@ -268,6 +428,59 @@ def passk_context_warnings(record: PassKRecord) -> dict[str, float | int | str]:
     elif degenerate_share >= 0.5:
         warnings["warning"] = "high degenerate share in pass@k trials"
     return warnings
+
+
+def context_lint_hits(statement: str, truth: str) -> dict:
+    """Advisory-only context/degeneracy lint (see --context-lint-mode).
+
+    Never influences status or score. Returns
+    ``{"classes": {name: [snippets]}, "hit_count": n}`` with empty classes
+    omitted.
+    """
+    classes: dict[str, list[str]] = {}
+
+    missing_context = [match.group(0) for match in _MISSING_CONTEXT_PHRASES.finditer(statement)]
+    if missing_context:
+        classes["missing_context_placeholder"] = missing_context
+
+    source_local = [match.group(0) for match in _SOURCE_LOCAL_PHRASES.finditer(statement)]
+    if source_local:
+        classes["source_local_language"] = source_local
+
+    defines_then_asks = _defines_then_asks_symbols(statement)
+    if defines_then_asks:
+        classes["defines_then_asks"] = defines_then_asks
+
+    # "Verbatim" is exact-case by design; short answers (< 6 chars) are
+    # excluded since coincidental recall of e.g. "0" or "true" is common.
+    normalized_truth = _WHITESPACE.sub(" ", truth).strip()
+    if len(normalized_truth) >= 6:
+        normalized_statement = _WHITESPACE.sub(" ", statement)
+        if normalized_truth in normalized_statement:
+            classes["verbatim_formula_recall"] = [normalized_truth]
+
+    hit_count = sum(len(snippets) for snippets in classes.values())
+    return {"classes": classes, "hit_count": hit_count}
+
+
+def _defines_then_asks_symbols(statement: str) -> list[str]:
+    """Conservative define-then-ask heuristic: a symbol introduced via
+    ``<sym> :=``/``let <sym> denote``/``define <sym>`` that reappears inside
+    a later find/compute/determine/what-is/evaluate clause.
+    """
+    defined_at: dict[str, int] = {}
+    for match in _SYMBOL_DEFINITION.finditer(statement):
+        symbol = match.group("let_sym") or match.group("def_sym") or match.group("eq_sym")
+        if symbol and symbol not in defined_at:
+            defined_at[symbol] = match.end()
+
+    hits = []
+    for match in _SYMBOL_ASK.finditer(statement):
+        symbol = match.group("sym")
+        define_end = defined_at.get(symbol)
+        if define_end is not None and match.start() > define_end and symbol not in hits:
+            hits.append(symbol)
+    return hits
 
 
 def status_counts(results: Iterable[WellPosednessResult]) -> dict[str, int]:

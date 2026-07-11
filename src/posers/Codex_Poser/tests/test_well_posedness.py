@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -19,7 +20,13 @@ from codex_poser.well_posedness.judge_providers import (
     load_key_env,
 )
 from codex_poser.well_posedness.contracts import PassKRecord
-from codex_poser.well_posedness.scoring import score_record
+from codex_poser.well_posedness.scoring import (
+    _PROMPT,
+    _PROMPT_V2,
+    context_lint_hits,
+    score_record,
+    score_records,
+)
 
 
 def _judge_reply(determined: bool):
@@ -30,6 +37,24 @@ def _judge_reply(determined: bool):
                 "insufficient_context": not determined,
                 "reason": "fixture",
                 "confidence": 0.91,
+            }
+        )
+
+    return judge
+
+
+def _capturing_judge(captured: list[str], determined: bool = True):
+    """Fake judge that records every prompt it receives, for asserting on
+    rubric-version prompt selection."""
+
+    def judge(prompt: str) -> str:
+        captured.append(prompt)
+        return json.dumps(
+            {
+                "determined": determined,
+                "insufficient_context": not determined,
+                "reason": "fixture",
+                "confidence": 0.9,
             }
         )
 
@@ -142,6 +167,222 @@ class WellPosednessScoringTests(unittest.TestCase):
 
         self.assertEqual(first.uid, second.uid)
         self.assertNotEqual(first.rid, second.rid)
+
+
+class WellPosednessPromptPinTests(unittest.TestCase):
+    def test_v1_prompt_hash_is_pinned(self) -> None:
+        # _PROMPT text is a billed cache-key interface (judge cache keys off
+        # the rendered prompt). Any deliberate v1 edit must update this hash
+        # AND the SESSION_HANDOFF note that references it.
+        digest = hashlib.sha256(_PROMPT.encode("utf-8")).hexdigest()
+        self.assertEqual(
+            digest,
+            "d60fea9dacd779e3e679ac63d86e50839ad4a0a0a4452beb3b4c9b9a9fe2b4e4",
+        )
+
+
+class WellPosednessRubricVersionTests(unittest.TestCase):
+    def _extracted_record(self) -> PassKRecord:
+        return PassKRecord.from_raw(
+            {
+                "source": "realmath",
+                "provenance": "extracted",
+                "statement": "Determine x such that x^2 = 4.",
+                "truth": "2",
+                "n_correct": 1,
+                "n_wrong": 1,
+            },
+            rid=0,
+        )
+
+    def test_rubric_v2_selects_v2_prompt_text(self) -> None:
+        captured: list[str] = []
+
+        result = score_record(
+            self._extracted_record(),
+            judge=_capturing_judge(captured),
+            judge_samples=1,
+            judge_uphold=1,
+            rubric_version="v2",
+        )
+
+        self.assertIn("Attempt the derivation", captured[0])
+        self.assertNotIn("Do not solve it", captured[0])
+        self.assertEqual(result.signals["judge"]["rubric_version"], "v2")
+
+    def test_rubric_default_selects_v1_prompt_text(self) -> None:
+        captured: list[str] = []
+
+        result = score_record(
+            self._extracted_record(),
+            judge=_capturing_judge(captured),
+            judge_samples=1,
+            judge_uphold=1,
+        )
+
+        self.assertIn("Do not solve it", captured[0])
+        self.assertEqual(result.signals["judge"]["rubric_version"], "v1")
+
+    def test_score_records_threads_rubric_version_and_lint_mode(self) -> None:
+        captured: list[str] = []
+
+        scored = score_records(
+            [self._extracted_record()],
+            judge=_capturing_judge(captured),
+            judge_samples=1,
+            judge_uphold=1,
+            rubric_version="v2",
+            context_lint_mode="advisory",
+        )
+
+        _, result = scored[0]
+        self.assertIn("Attempt the derivation", captured[0])
+        self.assertEqual(result.signals["judge"]["rubric_version"], "v2")
+        self.assertEqual(result.signals["context_lint"]["mode"], "advisory")
+
+
+class WellPosednessContextLintTests(unittest.TestCase):
+    def test_missing_context_placeholder_class(self) -> None:
+        hits = context_lint_hits(
+            "Solve the problem given a system with the stated assumptions.",
+            "5",
+        )
+
+        self.assertIn("missing_context_placeholder", hits["classes"])
+        self.assertIn("a system", hits["classes"]["missing_context_placeholder"])
+        self.assertGreaterEqual(hits["hit_count"], 1)
+
+    def test_source_local_language_class(self) -> None:
+        hits = context_lint_hits(
+            "Using the notation defined above, compute the integral.",
+            "7",
+        )
+
+        self.assertIn("source_local_language", hits["classes"])
+        self.assertIn("defined above", hits["classes"]["source_local_language"])
+
+    def test_defines_then_asks_class(self) -> None:
+        hits = context_lint_hits(
+            "Let T denote the linear operator described. Determine T.",
+            "anything",
+        )
+
+        self.assertEqual(hits["classes"]["defines_then_asks"], ["T"])
+
+    def test_verbatim_formula_recall_class(self) -> None:
+        hits = context_lint_hits(
+            "Show that the expression simplifies to x^2 + 1 for all real x.",
+            "x^2 + 1",
+        )
+
+        self.assertEqual(hits["classes"]["verbatim_formula_recall"], ["x^2 + 1"])
+
+    def test_no_hits_returns_empty_classes_and_zero_count(self) -> None:
+        hits = context_lint_hits("Find the value of 2 + 2.", "4")
+
+        self.assertEqual(hits["classes"], {})
+        self.assertEqual(hits["hit_count"], 0)
+
+
+class WellPosednessContextLintAdvisoryTests(unittest.TestCase):
+    def test_advisory_attaches_on_computed_pass_path(self) -> None:
+        record = PassKRecord.from_raw(
+            {
+                "source": "generated",
+                "provenance": "computed",
+                "statement": "Find the value of 2 + 2, as specified.",
+                "truth": "4",
+                "n_correct": 4,
+                "n_wrong": 4,
+            },
+            rid=0,
+        )
+
+        result = score_record(record, context_lint_mode="advisory")
+
+        self.assertEqual(result.status, "pass")
+        self.assertEqual(result.signals["context_lint"]["mode"], "advisory")
+        self.assertIn(
+            "missing_context_placeholder", result.signals["context_lint"]["classes"]
+        )
+
+    def test_advisory_attaches_on_defer_path(self) -> None:
+        record = PassKRecord.from_raw(
+            {
+                "source": "realmath",
+                "provenance": "extracted",
+                "statement": "Using the notation above, determine x such that x^2 = 4.",
+                "truth": "2",
+                "n_correct": 1,
+                "n_wrong": 1,
+            },
+            rid=0,
+        )
+
+        result = score_record(record, context_lint_mode="advisory")
+
+        self.assertEqual(result.status, "defer")
+        self.assertEqual(result.signals["context_lint"]["mode"], "advisory")
+
+    def test_advisory_attaches_on_judge_flag_path(self) -> None:
+        record = PassKRecord.from_raw(
+            {
+                "source": "realmath",
+                "provenance": "extracted",
+                "statement": "Let T denote the operator. Determine T.",
+                "truth": "1",
+                "n_correct": 1,
+                "n_wrong": 1,
+            },
+            rid=0,
+        )
+
+        result = score_record(
+            record,
+            judge=_judge_reply(determined=False),
+            judge_samples=3,
+            judge_uphold=2,
+            context_lint_mode="advisory",
+        )
+
+        self.assertEqual(result.status, "flag")
+        self.assertEqual(result.signals["context_lint"]["mode"], "advisory")
+        self.assertIn("defines_then_asks", result.signals["context_lint"]["classes"])
+
+    def test_off_mode_attaches_nothing(self) -> None:
+        record = PassKRecord.from_raw(
+            {
+                "source": "realmath",
+                "provenance": "extracted",
+                "statement": "Using the notation above, determine x such that x^2 = 4.",
+                "truth": "2",
+                "n_correct": 1,
+                "n_wrong": 1,
+            },
+            rid=0,
+        )
+
+        result = score_record(record)
+
+        self.assertNotIn("context_lint", result.signals)
+
+    def test_status_and_score_identical_between_off_and_advisory(self) -> None:
+        raw = {
+            "source": "realmath",
+            "provenance": "extracted",
+            "statement": "Using the notation above, determine x such that x^2 = 4.",
+            "truth": "2",
+            "n_correct": 1,
+            "n_wrong": 1,
+        }
+
+        off_result = score_record(PassKRecord.from_raw(raw, rid=0))
+        advisory_result = score_record(
+            PassKRecord.from_raw(raw, rid=0), context_lint_mode="advisory"
+        )
+
+        self.assertEqual(off_result.status, advisory_result.status)
+        self.assertEqual(off_result.score, advisory_result.score)
 
 
 class WellPosednessCliTests(unittest.TestCase):
@@ -304,6 +545,71 @@ class WellPosednessCliTests(unittest.TestCase):
 
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("openai_key.env", completed.stderr)
+
+    def test_cli_defaults_rubric_version_v1_and_lint_mode_off(self) -> None:
+        repo = Path(__file__).resolve().parents[1]
+        fixture = repo / "tests" / "fixtures" / "pass_at_k.jsonl"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "well_posedness.json"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "codex_poser.well_posedness.cli",
+                    "score",
+                    "--mode",
+                    "flow_testing",
+                    "--input",
+                    str(fixture),
+                    "--output",
+                    str(output),
+                ],
+                cwd=repo,
+                env={"PYTHONPATH": str(repo / "src")},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(payload["parameters"]["context_lint_mode"], "off")
+            self.assertEqual(payload["parameters"]["judge"]["rubric_version"], "v1")
+            self.assertEqual(payload["counts"]["insufficient_context_majority"], 0)
+
+    def test_cli_accepts_rubric_version_and_lint_mode_flags(self) -> None:
+        repo = Path(__file__).resolve().parents[1]
+        fixture = repo / "tests" / "fixtures" / "pass_at_k.jsonl"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "well_posedness.json"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "codex_poser.well_posedness.cli",
+                    "score",
+                    "--mode",
+                    "flow_testing",
+                    "--context-lint-mode",
+                    "advisory",
+                    "--judge-rubric-version",
+                    "v2",
+                    "--input",
+                    str(fixture),
+                    "--output",
+                    str(output),
+                ],
+                cwd=repo,
+                env={"PYTHONPATH": str(repo / "src")},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(payload["parameters"]["context_lint_mode"], "advisory")
+            self.assertEqual(payload["parameters"]["judge"]["rubric_version"], "v2")
 
 
 class KeyEnvTests(unittest.TestCase):
@@ -485,6 +791,58 @@ class OpenAIJudgePayloadTests(unittest.TestCase):
     def test_openai_usage_no_details_for_legacy_models(self) -> None:
         usage = _openai_usage({"usage": {"input_tokens": 10, "output_tokens": 5}})
         self.assertEqual(usage, {"input_tokens": 10, "output_tokens": 5})
+
+
+class WellPosednessRubricV3Tests(unittest.TestCase):
+    def _capture_prompt(self, rubric_version: str) -> str:
+        captured = {}
+
+        def judge(prompt: str) -> str:
+            captured["prompt"] = prompt
+            return json.dumps(
+                {"determined": True, "insufficient_context": False,
+                 "reason": "fixture", "confidence": 0.9}
+            )
+
+        record = PassKRecord.from_raw(
+            {
+                "source": "realmath",
+                "provenance": "extracted",
+                "statement": "Determine x such that x^2 = 4.",
+                "truth": "2",
+                "n_correct": 1,
+                "n_wrong": 1,
+            },
+            rid=0,
+        )
+        result = score_record(record, judge=judge, rubric_version=rubric_version)
+        self.assertEqual(result.signals["judge"]["rubric_version"], rubric_version)
+        return captured["prompt"]
+
+    def test_rubric_v3_selects_v3_prompt_text(self) -> None:
+        prompt = self._capture_prompt("v3")
+        self.assertIn("Sketch — do not write out — the derivation", prompt)
+        self.assertIn("If you cannot name the missing ingredient or defect, do not flag.", prompt)
+        self.assertNotIn("Do not solve it", prompt)
+        self.assertNotIn("Attempt the derivation.", prompt)
+
+    def test_rubric_v2_unaffected_by_v3_addition(self) -> None:
+        prompt = self._capture_prompt("v2")
+        self.assertIn("Attempt the derivation.", prompt)
+        self.assertNotIn("Sketch — do not write out", prompt)
+
+
+class JudgeMaxTokensFlagTests(unittest.TestCase):
+    def test_judge_max_tokens_default_and_explicit(self) -> None:
+        from codex_poser.well_posedness.cli import build_parser
+
+        parser = build_parser()
+        base = ["score", "--mode", "flow_testing", "--input", "in.jsonl", "--output", "out.json"]
+        self.assertEqual(parser.parse_args(base).judge_max_tokens, 512)
+        self.assertEqual(
+            parser.parse_args(base + ["--judge-max-tokens", "4000"]).judge_max_tokens,
+            4000,
+        )
 
 
 if __name__ == "__main__":

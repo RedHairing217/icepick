@@ -58,6 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="default source name when input rows omit source",
     )
     score.add_argument(
+        "--context-lint-mode",
+        choices=("off", "advisory"),
+        default="off",
+        help="advisory-only context/degeneracy lint on statements; never affects status or score",
+    )
+    score.add_argument(
         "--judge",
         action="store_true",
         help="call a judge provider for semantic residue left after the code screen",
@@ -96,10 +102,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="votes required to uphold an ill-posed flag",
     )
     score.add_argument(
+        "--judge-rubric-version",
+        choices=("v1", "v2", "v3"),
+        default="v1",
+        help="judge prompt rubric version; v1 is the billed cache-key default",
+    )
+    score.add_argument(
         "--judge-timeout",
         type=float,
         default=60.0,
         help="judge request timeout in seconds",
+    )
+    score.add_argument(
+        "--judge-max-tokens",
+        type=int,
+        default=512,
+        help="max output tokens per judge sample; raise for rubrics that ask the judge to derive",
     )
     return parser
 
@@ -119,6 +137,7 @@ def run_score(args: argparse.Namespace) -> int:
                 key_env_path=key_env_path,
                 cache_path=args.judge_cache,
                 model_override=args.judge_model,
+                max_tokens=args.judge_max_tokens,
                 timeout_seconds=args.judge_timeout,
             )
         records, input_summaries = load_records(args.input, default_source=args.source)
@@ -127,6 +146,8 @@ def run_score(args: argparse.Namespace) -> int:
             judge=judge,
             judge_samples=args.judge_samples,
             judge_uphold=args.judge_uphold,
+            rubric_version=args.judge_rubric_version,
+            context_lint_mode=args.context_lint_mode,
         )
         rows = [result.to_record(record) for record, result in scored]
         results = [result for _, result in scored]
@@ -144,6 +165,9 @@ def run_score(args: argparse.Namespace) -> int:
             judge_provider=args.judge_provider if args.judge else None,
             judge_samples=args.judge_samples,
             judge_uphold=args.judge_uphold,
+            judge_rubric_version=args.judge_rubric_version,
+            judge_max_tokens=args.judge_max_tokens,
+            context_lint_mode=args.context_lint_mode,
         )
         if output_format == "csv":
             write_csv(args.output, rows)
@@ -161,6 +185,7 @@ def run_score(args: argparse.Namespace) -> int:
         f"mode={args.mode} input={len(records)} "
         f"pass={counts['pass']} flag={counts['flag']} "
         f"defer={counts['defer']} error={counts['error']} "
+        f"ic_majority={counts['insufficient_context_majority']} "
         f"output={args.output}"
     )
     return 0
@@ -179,9 +204,17 @@ def build_payload(
     judge_provider: str | None = None,
     judge_samples: int = 3,
     judge_uphold: int = 2,
+    judge_rubric_version: str = "v1",
+    judge_max_tokens: int = 512,
+    context_lint_mode: str = "off",
 ) -> dict:
     counts = status_counts(results)
     counts["total"] = len(rows)
+    counts["insufficient_context_majority"] = sum(
+        1
+        for result in results
+        if (result.signals.get("judge") or {}).get("insufficient_context")
+    )
     return {
         "run": {
             "module": "well_posedness",
@@ -197,6 +230,7 @@ def build_payload(
             "structural_screens": ["reference", "citation", "label"],
             "computed_provenance_policy": "pass when structural screen is clean",
             "residue_policy": "defer extracted/manual/external/unknown records without structural defects",
+            "context_lint_mode": context_lint_mode,
             "judge": {
                 "enabled": judge_enabled,
                 "provider": judge_provider,
@@ -205,6 +239,8 @@ def build_payload(
                 "cache": str(judge_cache) if judge_cache else None,
                 "samples": judge_samples,
                 "uphold": judge_uphold,
+                "rubric_version": judge_rubric_version,
+                "max_tokens": judge_max_tokens,
             },
         },
         "warnings": _warnings(rows),
