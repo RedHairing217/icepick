@@ -135,6 +135,76 @@ _JUNK_ANSWER_MARKERS = (
 
 _ARXIV_LINK_RE = re.compile(r"(?:^|/|\.)arxiv\.org/(?:abs|pdf)/([^?#\s]+)")
 
+# qa_ref_guard policy: what to do with a row whose miner-set
+# metadata.has_external_refs is still true after realmath's E5 reference
+# resolution (i.e. a \ref/\eqref the extractor could not fully resolve to
+# content elsewhere in the paper). No existing CLI/manifest surface governs
+# a similar per-run quality policy today, so this stays a plain parameter
+# threaded through normalise -> write_run -> run, defaulting to "advisory".
+DEFAULT_QA_REF_GUARD = "advisory"
+QA_REF_GUARD_VALUES = ("off", "advisory", "strict")
+
+# Measured hole-bigram patterns _clean_tex's bare \ref-family deletion tends
+# to leave behind (docs/... corpus audit): grammatical holes a QA model then
+# paraphrases over confidently rather than flagging. Advisory-only — see
+# elision_signals()'s docstring for the precision numbers behind that choice.
+_ELISION_PATTERNS = {
+    "solution_of_comma": re.compile(
+        r"(?:solutions?|subsolutions?|supersolutions?)\s+(?:of|to)\s*[,.;]",
+        re.IGNORECASE,
+    ),
+    "solution_of_conjunction": re.compile(
+        r"(?:solutions?)\s+(?:of|to)\s+(?:such that|with|satisfying|where)\b",
+        re.IGNORECASE,
+    ),
+    "system_dash": re.compile(
+        r"\bsystem\s*[–—-]+\s*(?:with|and|,|\.)",
+        re.IGNORECASE,
+    ),
+    "assumptions_hold": re.compile(
+        r"\bassumptions?\s+(?:and\s+)?(?:be satisfied|holds?\b)",
+        re.IGNORECASE,
+    ),
+    "dangling_preposition_equation": re.compile(
+        r"\b(?:of|to|by|from|in|satisfying|satisfies)\s*[,;]\s*\\begin\{equation",
+        re.IGNORECASE,
+    ),
+}
+
+
+def elision_signals(source_statement: str) -> dict:
+    """Count measured \\ref-stripping hole-bigrams in a statement.
+
+    Pure and advisory-only: a non-empty result means the statement carries
+    one of the grammatical-hole shapes ``_clean_tex``'s bare macro deletion
+    tends to leave (e.g. "solutions of, must vanish..."), not proof the
+    statement is actually broken. Measured precision is too weak to
+    quarantine alone (3 real catches against 6 false positives in the
+    corpus audit) — ``normalise`` only ever annotates on this, never
+    quarantines.
+    """
+    text = source_statement or ""
+    counts: dict = {}
+    for name, pattern in _ELISION_PATTERNS.items():
+        n = len(pattern.findall(text))
+        if n:
+            counts[name] = n
+    return counts
+
+
+def _unresolved_external_refs(metadata: dict) -> bool:
+    """True when ``has_external_refs`` is set and resolution didn't cure it.
+
+    Flagged: a label is still unresolved, or no resolution was attempted at
+    all (no ``resolved_refs``). Not flagged: ``resolved_refs`` non-empty and
+    ``unresolved_refs`` empty — every reference the row carried resolved.
+    """
+    if not metadata.get("has_external_refs"):
+        return False
+    if metadata.get("unresolved_refs"):
+        return True
+    return not metadata.get("resolved_refs")
+
 
 @dataclass
 class NormaliseResult:
@@ -144,6 +214,7 @@ class NormaliseResult:
     quarantined: list  # list[dict] with ``reason`` and the offending candidate
     duplicates_dropped: int
     warnings: list
+    guard_flagged: int = 0  # rows the quality guard annotated (advisory) or quarantined (strict)
 
 
 @dataclass
@@ -163,6 +234,7 @@ class ScrapeRunResult:
     manifest_path: Path
     report_path: Path
     raw_dir: Path
+    guard_flagged: int = 0  # quality-guard annotated/quarantined rows (main + surplus)
     warnings: list = field(default_factory=list)
     acquisition: Optional[dict] = None  # arXiv/e-print/LLM call counts (production only)
     interrupted: bool = False  # paused (Ctrl-C); rerun the same command to resume
@@ -262,7 +334,7 @@ def estimate(plan):
     }
 
 
-def run(manifest, *, now: Optional[datetime] = None):
+def run(manifest, *, now: Optional[datetime] = None, qa_ref_guard: str = DEFAULT_QA_REF_GUARD):
     """Execute an acquisition run from an approved manifest.
 
     Every gate — source type, mode, approval, call budget, output
@@ -270,12 +342,16 @@ def run(manifest, *, now: Optional[datetime] = None):
     the manifest's ``calibration_sheet`` fixture; ``production`` scrapes
     arXiv in-house from the manifest's ``scrape_window``. Both funnel the
     raw candidates through the same normalise + run-layout writer.
+    ``qa_ref_guard`` (see ``normalise``) passes straight through to it.
     """
     _validate_manifest(manifest)
     run_dir = run_dir_for(manifest)
     if manifest.processor_mode == MODE_FLOW_TESTING:
         candidates = read_fixture_candidates(manifest, run_dir)
-        return write_run(manifest, run_dir, candidates, calibration_replay=True, now=now)
+        return write_run(
+            manifest, run_dir, candidates, calibration_replay=True, now=now,
+            qa_ref_guard=qa_ref_guard,
+        )
     scrape_result, checkpoint = _scrape_candidates(manifest, run_dir)
     acquisition = {
         "arxiv_queries": scrape_result.queries,
@@ -305,13 +381,14 @@ def run(manifest, *, now: Optional[datetime] = None):
         progress_dir=checkpoint.progress_dir,
         surplus=scrape_result.surplus,
         now=now,
+        qa_ref_guard=qa_ref_guard,
     )
     if not scrape_result.interrupted:
         checkpoint.mark_complete()
     return outcome
 
 
-def normalise(raw_outputs):
+def normalise(raw_outputs, *, qa_ref_guard: str = DEFAULT_QA_REF_GUARD):
     """Convert raw scraper candidate rows into canonical record dicts.
 
     ``raw_outputs`` is a dict with ``source_name`` and ``candidates``
@@ -322,7 +399,22 @@ def normalise(raw_outputs):
     growing the top-level schema. Records whose truth was generated
     rather than extracted keep ``provenance = "computed"`` so
     groundtruth can discard them.
+
+    ``qa_ref_guard`` (``off`` / ``advisory`` / ``strict``, default
+    ``"advisory"``) governs rows whose miner-set
+    ``metadata["has_external_refs"]`` is still true after realmath's
+    reference resolution — a \\ref/\\eqref the extractor could not (fully)
+    resolve to content elsewhere in the paper. ``off`` ignores the signal;
+    ``advisory`` annotates ``metadata["quality_guard"]`` and counts it;
+    ``strict`` quarantines the row instead (reason tagged
+    ``"[quality-guard]"``). A row whose references all resolved is never
+    flagged — resolution cured it. Independent of this policy, every row's
+    statement is also scanned for measured elision hole-bigrams
+    (:func:`elision_signals`) and annotated advisory-only; that scan never
+    quarantines on its own.
     """
+    if qa_ref_guard not in QA_REF_GUARD_VALUES:
+        raise ValueError(f"qa_ref_guard must be one of {QA_REF_GUARD_VALUES}, got {qa_ref_guard!r}")
     source_name, candidates, families, truth_policy = _validated_raw_outputs(raw_outputs)
     family_default = families[0] if len(families) == 1 else "realmath"
 
@@ -331,6 +423,7 @@ def normalise(raw_outputs):
     warnings: list = []
     seen_statements: set = set()
     duplicates_dropped = 0
+    guard_flagged = 0
 
     for index, row in enumerate(candidates):
         if not isinstance(row, dict):
@@ -345,6 +438,18 @@ def normalise(raw_outputs):
         dedup_key = " ".join(statement.lower().split())
         if dedup_key in seen_statements:
             duplicates_dropped += 1
+            continue
+
+        row_metadata = row.get("metadata")
+        row_metadata = row_metadata if isinstance(row_metadata, dict) else {}
+        ref_flagged = qa_ref_guard != "off" and _unresolved_external_refs(row_metadata)
+        if ref_flagged and qa_ref_guard == "strict":
+            quarantined.append({
+                "reason": "[quality-guard] unresolved external refs in source",
+                "candidate_index": index,
+                "candidate": row,
+            })
+            guard_flagged += 1
             continue
 
         try:
@@ -363,6 +468,17 @@ def normalise(raw_outputs):
             )
             continue
 
+        guard_block: dict = {}
+        if ref_flagged and qa_ref_guard == "advisory":
+            guard_block["unresolved_external_refs"] = True
+            guard_block["policy"] = "advisory"
+        signals = elision_signals(statement)
+        if signals:
+            guard_block["elision_signals"] = signals
+        if guard_block:
+            record.setdefault("metadata", {})["quality_guard"] = guard_block
+            guard_flagged += 1
+
         seen_statements.add(dedup_key)
         records.append(record)
 
@@ -371,6 +487,7 @@ def normalise(raw_outputs):
         quarantined=quarantined,
         duplicates_dropped=duplicates_dropped,
         warnings=warnings,
+        guard_flagged=guard_flagged,
     )
 
 
@@ -498,12 +615,15 @@ def write_run(
     surplus: Optional[list] = None,
     report_title: Optional[str] = None,
     now: Optional[datetime] = None,
+    qa_ref_guard: str = DEFAULT_QA_REF_GUARD,
 ) -> ScrapeRunResult:
     """Normalise candidates and write the full run layout.
 
     Shared by both realmath modes and — public seam since F2 — by sibling
     source adapters (arxiv_bulk); keep the signature stable. ``report_title``
     lets a sibling stamp an honest heading; None keeps realmath's.
+    ``qa_ref_guard`` (see ``normalise``) applies identically to the main and
+    surplus pools.
     """
     now = now or datetime.now(timezone.utc)
     papers, duplicate_titles = _paper_pool(candidates)
@@ -513,7 +633,8 @@ def write_run(
             "candidates": candidates,
             "families": list(manifest.families or []),
             "truth_policy": manifest.truth_policy,
-        }
+        },
+        qa_ref_guard=qa_ref_guard,
     )
     if calibration_replay:
         for record in result.records:
@@ -534,7 +655,8 @@ def write_run(
                 "candidates": list(surplus),
                 "families": list(manifest.families or []),
                 "truth_policy": manifest.truth_policy,
-            }
+            },
+            qa_ref_guard=qa_ref_guard,
         )
         handoff_statements = {record["statement"] for record in result.records}
         for record in surplus_result.records:
@@ -589,6 +711,9 @@ def write_run(
             f"surplus: dropped {surplus_duplicates} rows duplicating handoff or surplus statements"
         )
 
+    # Mirrors quarantined_count's main + surplus roll-up above.
+    guard_flagged = result.guard_flagged + (surplus_result.guard_flagged if surplus_result else 0)
+
     outcome = ScrapeRunResult(
         run_id=manifest.run_id,
         processor_mode=manifest.processor_mode,
@@ -603,6 +728,7 @@ def write_run(
         manifest_path=manifest_path,
         report_path=run_dir / "reports" / "source_report.md",
         raw_dir=raw_dir,
+        guard_flagged=guard_flagged,
         warnings=warnings,
         acquisition=acquisition,
         interrupted=interrupted,
@@ -875,6 +1001,7 @@ def _write_report(
         f"| candidates read | {outcome.candidate_count} |",
         f"| duplicate statements dropped | {outcome.duplicates_dropped} |",
         f"| quarantined | {outcome.quarantined_count} |",
+        f"| quality-guard flagged | {outcome.guard_flagged} |",
         f"| handoff records | {outcome.record_count} |",
         f"| surplus records (cap overflow, preserved) | {outcome.surplus_count} |",
         "",

@@ -661,10 +661,67 @@ _COMMENT_RE = re.compile(r"(?<!\\)%[^\n]*")
 # Artifacts stripped from a raw theorem body to get a readable statement.
 _LABEL_RE = re.compile(r"\\label\s*\{[^}]*\}")
 _CITE_RE = re.compile(r"\\[a-zA-Z]*cite[a-zA-Z]*\s*(?:\[[^\]]*\])?\{[^}]*\}")
-_REF_RE = re.compile(r"\\(?:eqref|ref|cref|Cref|autoref|pageref)\s*\{[^}]*\}")
+_REF_MACROS = ("eqref", "ref", "cref", "Cref", "autoref", "pageref")
+_REF_RE = re.compile(r"\\(?:" + "|".join(_REF_MACROS) + r")\s*\{[^}]*\}")
+# Same macro set, capturing the label so a reference can be resolved (E5)
+# instead of just detected.
+_REF_TARGET_RE = re.compile(r"\\(?:" + "|".join(_REF_MACROS) + r")\s*\{([^}]*)\}")
 _LEADING_OPT_RE = re.compile(r"^\s*\[[^\]]*\]")  # \begin{theorem}[Attribution]
 _EMPTY_BRACES_RE = re.compile(r"\{\s*\}")
 _SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([.,;:])")
+
+# Environments a \ref/\eqref/\cref plausibly points AT: numbered math
+# displays, plus a few theorem-like environments (assumption/definition/
+# hypothesis) that state a standing hypothesis once and get cited by many
+# results afterward rather than mined as problem candidates themselves
+# (those stay out of _THEOREM_ENVS on purpose — mining them as candidates
+# too would double-count the same content).
+_LABELED_ENV_NAMES = (
+    "equation", "align", "gather", "multline", "assumption", "definition", "hypothesis",
+)
+_LABELED_ENV_RE = re.compile(
+    r"\\begin\{(" + "|".join(_LABELED_ENV_NAMES) + r")\*?\}(.*?)\\end\{\1\*?\}",
+    re.DOTALL,
+)
+_LABEL_NAME_RE = re.compile(r"\\label\s*\{([^}]*)\}")
+_RESOLVED_REF_CAP = 600  # chars: enough context for the generator, not a full paper dump
+
+
+def _label_content_index(tex: str) -> dict:
+    """Map every ``\\label`` inside a labeled display/hypothesis environment
+    to that environment's (cleaned, capped) body.
+
+    Built once per paper — ``tex`` is only in scope in
+    ``extract_theorem_candidates`` — so a theorem's dangling ``\\ref`` can be
+    resolved to the content it actually names instead of ``_clean_tex``
+    silently deleting it bare (the R2 defect this mission cures).
+    """
+    index: dict = {}
+    for match in _LABELED_ENV_RE.finditer(tex):
+        body = match.group(2)
+        labels = _LABEL_NAME_RE.findall(body)
+        if not labels:
+            continue
+        content = _LABEL_RE.sub("", body)
+        content = " ".join(content.split())[:_RESOLVED_REF_CAP]
+        for label in labels:
+            index.setdefault(label, content)
+    return index
+
+
+def _referenced_labels(raw_body: str) -> list:
+    """Every label a \\ref-family macro in ``raw_body`` names, in order.
+
+    A cleveref-style multi-ref (``\\cref{a,b}``) splits on comma. A match
+    whose braces carry no usable label text (e.g. ``\\ref{}``) still
+    contributes one empty entry, so it is counted as unresolved rather than
+    silently disappearing.
+    """
+    labels: list = []
+    for match in _REF_TARGET_RE.finditer(raw_body):
+        parts = [part.strip() for part in match.group(1).split(",")]
+        labels.extend([part for part in parts if part] or [""])
+    return labels
 
 
 def latex_extractor(paper: Paper, *, family: Optional[str] = None, source_fetcher: Optional[Callable] = None) -> list:
@@ -690,6 +747,9 @@ def extract_theorem_candidates(tex: str, paper: Paper, *, family: Optional[str] 
     # empty (skipped) statement rather than leaking ``%`` residue or surviving
     # dedup as a near-duplicate of its live twin.
     tex = _COMMENT_RE.sub("", tex)
+    # Built once per paper while the full ``tex`` is in scope (the only place
+    # it exists) so a theorem's \ref/\eqref can be resolved below.
+    label_index = _label_content_index(tex)
     candidates: list = []
     for match in _ENV_RE.finditer(tex):
         environment = match.group(1)
@@ -702,11 +762,31 @@ def extract_theorem_candidates(tex: str, paper: Paper, *, family: Optional[str] 
             "primary_category": paper.primary_category,
             "environment": environment,
             "extraction": "latex_theorem",
+            # Audit trail: the pre-clean body, so a retro-audit (or a later
+            # resolver) can see what _clean_tex stripped away — today only
+            # the post-strip statement survives, which blinded that audit.
+            "source_statement_raw": raw_body,
         }
         # The statement pointed at an equation/section defined elsewhere in the
-        # paper — flag it so operators can filter for self-contained problems.
+        # paper — flag it so operators can filter for self-contained problems,
+        # and try to resolve each reference to the content it names (the R2
+        # cure: a resolved reference lets the QA generator pose a
+        # self-contained problem instead of paraphrasing over the
+        # grammatical hole a bare-stripped \ref leaves behind).
         if _REF_RE.search(raw_body):
             metadata["has_external_refs"] = True
+            resolved: dict = {}
+            unresolved: list = []
+            for label in _referenced_labels(raw_body):
+                content = label_index.get(label) if label else None
+                if content is not None:
+                    resolved[label] = content
+                else:
+                    unresolved.append(label)
+            if resolved:
+                metadata["resolved_refs"] = resolved
+            if unresolved:
+                metadata["unresolved_refs"] = unresolved
         candidate = {
             "link": paper.link,
             "arxiv_id": paper.arxiv_id,
@@ -783,14 +863,37 @@ def qa_extractor(
     the SDK. Records stay ``provenance = "extracted"`` — the model is
     instructed to extract, not compute. One theorem the generator can't
     handle is skipped, not fatal.
+
+    A theorem whose external references were resolved to content elsewhere
+    in the paper (``theorem["metadata"]["resolved_refs"]``, built by
+    ``extract_theorem_candidates``) gets an extended ``generator`` input —
+    the statement plus the resolved content — so the generator can pose a
+    self-contained problem instead of paraphrasing over the grammatical hole
+    a bare-stripped \\ref would otherwise leave. A theorem with no resolved
+    refs keeps the exact ``f"Theorem:\\n{statement}"`` input it always had,
+    so its QA cache key (``checkpoint.caching_generator`` hashes this same
+    string) is a pure function of the statement, untouched by this change —
+    only ref-carrying rows hash differently, and only because their input
+    now genuinely differs.
     """
     generate = generator or default_qa_generator
     theorems = latex_extractor(paper, family=family, source_fetcher=source_fetcher)
     candidates: list = []
     for theorem in theorems:
         source_statement = theorem["statement"]
+        theorem_metadata = theorem.get("metadata") or {}
+        resolved_refs = theorem_metadata.get("resolved_refs")
+        generate_input = f"Theorem:\n{source_statement}"
+        if resolved_refs:
+            refs_block = "\n".join(
+                f"({label}): {content}" for label, content in resolved_refs.items()
+            )
+            generate_input = (
+                f"{generate_input}\n\n"
+                f"Referenced content (resolved from the same paper):\n{refs_block}"
+            )
         try:
-            qa = generate(source_statement)
+            qa = generate(generate_input)
         except QAConfigError:
             raise  # misconfiguration is systemic — surface it, don't skip silently
         except Exception:  # noqa: BLE001 — skip a theorem the generator can't handle
@@ -805,6 +908,24 @@ def qa_extractor(
         # at harvest and discarded by groundtruth — never computed + extracted.
         provenance = qa.get("provenance", "extracted")
         truth_policy = "trusted" if provenance == "computed" else "extracted"
+        metadata = {
+            "title": paper.title,
+            "primary_category": paper.primary_category,
+            "environment": theorem_metadata.get("environment"),
+            "extraction": "llm_qa",
+            # Unchanged semantics: the cleaned statement the generator saw,
+            # NOT generate_input above (which may carry the ref extension).
+            "source_statement": source_statement,
+        }
+        # Copy through the miner's ref signals so they survive into the QA
+        # record instead of dead-ending here: qa_extractor used to rebuild
+        # this dict from scratch and silently drop has_external_refs (and,
+        # pre-E5, resolved/unresolved_refs didn't exist yet) — the guard in
+        # realmath_scrape.normalise() needs all four to tell a cured
+        # (all-resolved) row apart from one still carrying a dangling ref.
+        for key in ("has_external_refs", "source_statement_raw", "resolved_refs", "unresolved_refs"):
+            if key in theorem_metadata:
+                metadata[key] = theorem_metadata[key]
         candidate = {
             "link": paper.link,
             "arxiv_id": paper.arxiv_id,
@@ -813,13 +934,7 @@ def qa_extractor(
             "tier": tier,
             "provenance": provenance,
             "truth_policy": truth_policy,
-            "metadata": {
-                "title": paper.title,
-                "primary_category": paper.primary_category,
-                "environment": theorem["metadata"].get("environment"),
-                "extraction": "llm_qa",
-                "source_statement": source_statement,
-            },
+            "metadata": metadata,
         }
         if family:
             candidate["family"] = family
@@ -994,6 +1109,12 @@ def default_qa_generator(
     the model returns ``is_good_theorem=true`` with populated fields, else
     ``None``. Records stay ``provenance=extracted`` — the model is instructed
     to extract, not compute.
+
+    ``statement`` is sent verbatim as the user message: the caller (normally
+    ``qa_extractor``) builds the full prompt text, including the
+    ``"Theorem:\\n"`` framing and any resolved-reference extension, so it
+    controls the exact prompt shape (and, transitively, what the checkpoint's
+    QA cache hashes) rather than this function re-wrapping it.
     """
     import json as _json
 
@@ -1027,7 +1148,7 @@ def default_qa_generator(
         model=model,
         max_tokens=max_tokens,
         system=_cached_system_prompt(_QA_SYSTEM_PROMPT),
-        messages=[{"role": "user", "content": f"Theorem:\n{statement}"}],
+        messages=[{"role": "user", "content": statement}],
     )
     if usage_callback is not None:
         usage_callback(_usage_dict(message))

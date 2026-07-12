@@ -120,6 +120,58 @@ def test_extract_theorem_candidates_no_ref_flag_when_self_contained():
     assert "has_external_refs" not in c["metadata"]
 
 
+def test_extract_theorem_candidates_stores_the_raw_pre_clean_body():
+    """E1: the raw body survives as an audit trail, ref intact, even though
+    the cleaned ``statement`` still has it stripped."""
+    tex = r"\begin{theorem}Let $u$ solve Eq.~\eqref{eq:x}.\end{theorem}"
+    [c] = source.extract_theorem_candidates(tex, _paper())
+    assert "\\eqref{eq:x}" in c["metadata"]["source_statement_raw"]
+    assert c["metadata"]["has_external_refs"] is True
+    assert "\\eqref" not in c["statement"]  # the cleaned statement is unaffected
+
+
+def test_extract_theorem_candidates_resolves_refs_to_labeled_content():
+    """E5: a \\ref naming a labeled display environment resolves to its body."""
+    tex = (
+        r"\begin{equation}\label{eq:x} E=mc^2 \end{equation}"
+        r"\begin{theorem}The energy satisfies \eqref{eq:x}.\end{theorem}"
+    )
+    [c] = source.extract_theorem_candidates(tex, _paper())
+    assert c["metadata"]["resolved_refs"] == {"eq:x": "E=mc^2"}
+    assert "unresolved_refs" not in c["metadata"]
+
+
+def test_extract_theorem_candidates_resolves_refs_from_hypothesis_environments():
+    """The label index also covers assumption/definition/hypothesis envs —
+    standing hypotheses stated once and cited by many results afterward."""
+    tex = (
+        r"\begin{assumption}\label{ass:1} $f$ is Lipschitz. \end{assumption}"
+        r"\begin{theorem}Under~\ref{ass:1}, uniqueness holds.\end{theorem}"
+    )
+    [c] = source.extract_theorem_candidates(tex, _paper())
+    assert c["metadata"]["resolved_refs"] == {"ass:1": "$f$ is Lipschitz."}
+
+
+def test_extract_theorem_candidates_unresolved_ref_to_a_missing_label():
+    """A \\ref naming a label nowhere in the paper lands in unresolved_refs,
+    not silently dropped."""
+    tex = r"\begin{theorem}See~\eqref{eq:ghost}.\end{theorem}"
+    [c] = source.extract_theorem_candidates(tex, _paper())
+    assert c["metadata"]["unresolved_refs"] == ["eq:ghost"]
+    assert "resolved_refs" not in c["metadata"]
+    assert c["metadata"]["has_external_refs"] is True
+
+
+def test_extract_theorem_candidates_partial_resolution_keeps_both_lists():
+    tex = (
+        r"\begin{equation}\label{eq:x} E=mc^2 \end{equation}"
+        r"\begin{theorem}Combine \eqref{eq:x} and \eqref{eq:ghost}.\end{theorem}"
+    )
+    [c] = source.extract_theorem_candidates(tex, _paper())
+    assert c["metadata"]["resolved_refs"] == {"eq:x": "E=mc^2"}
+    assert c["metadata"]["unresolved_refs"] == ["eq:ghost"]
+
+
 def test_extract_theorem_candidates_drops_commented_out_theorems():
     """A commented-out copy of a theorem must not leak or survive as a duplicate."""
     tex = (

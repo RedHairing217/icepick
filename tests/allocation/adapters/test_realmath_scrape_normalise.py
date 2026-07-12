@@ -168,3 +168,169 @@ def test_normalise_ignores_arxiv_lookalike_hosts():
     result = _normalise([row])
     assert "arxiv_id" not in result.records[0]
     assert any("no arxiv_id" in w for w in result.warnings)
+
+
+# --- qa_ref_guard (E2) + elision_signals (E4) ----------------------------------
+
+
+def _ref_row(metadata, **overrides):
+    row = _upstream_row(metadata=metadata)
+    row.update(overrides)
+    return row
+
+
+def test_normalise_defaults_qa_ref_guard_to_advisory():
+    row = _ref_row({"has_external_refs": True, "unresolved_refs": ["eq:x"]})
+    result = _normalise([row])  # no qa_ref_guard override
+    guard = result.records[0]["metadata"]["quality_guard"]
+    assert guard == {"unresolved_external_refs": True, "policy": "advisory"}
+    assert result.guard_flagged == 1
+
+
+def test_normalise_advisory_annotates_and_counts_unresolved_refs():
+    row = _ref_row({"has_external_refs": True, "unresolved_refs": ["eq:x"]})
+    result = realmath_scrape.normalise(
+        {"source_name": "s", "candidates": [row]}, qa_ref_guard="advisory",
+    )
+    assert len(result.records) == 1
+    assert result.quarantined == []
+    guard = result.records[0]["metadata"]["quality_guard"]
+    assert guard["unresolved_external_refs"] is True
+    assert guard["policy"] == "advisory"
+    assert result.guard_flagged == 1
+
+
+def test_normalise_advisory_flags_a_row_with_no_resolution_attempted_at_all():
+    """has_external_refs true, no resolved_refs key at all (e.g. a row from
+    before E5, or where resolution failed to run) — still flagged."""
+    row = _ref_row({"has_external_refs": True})
+    result = realmath_scrape.normalise(
+        {"source_name": "s", "candidates": [row]}, qa_ref_guard="advisory",
+    )
+    assert result.records[0]["metadata"]["quality_guard"]["unresolved_external_refs"] is True
+
+
+def test_normalise_strict_quarantines_unresolved_refs_with_quality_guard_tag():
+    row = _ref_row({"has_external_refs": True, "unresolved_refs": ["eq:x"]})
+    result = realmath_scrape.normalise(
+        {"source_name": "s", "candidates": [row]}, qa_ref_guard="strict",
+    )
+    assert result.records == []
+    assert len(result.quarantined) == 1
+    assert result.quarantined[0]["reason"] == "[quality-guard] unresolved external refs in source"
+    assert result.guard_flagged == 1
+
+
+def test_normalise_off_policy_ignores_unresolved_refs():
+    row = _ref_row({"has_external_refs": True, "unresolved_refs": ["eq:x"]})
+    result = realmath_scrape.normalise(
+        {"source_name": "s", "candidates": [row]}, qa_ref_guard="off",
+    )
+    assert len(result.records) == 1
+    assert "quality_guard" not in result.records[0].get("metadata", {})
+    assert result.guard_flagged == 0
+
+
+def test_normalise_fully_resolved_refs_row_is_not_flagged():
+    """resolution cured it: resolved_refs non-empty, unresolved_refs empty."""
+    row = _ref_row({"has_external_refs": True, "resolved_refs": {"eq:x": "E=mc^2"}})
+    result = realmath_scrape.normalise(
+        {"source_name": "s", "candidates": [row]}, qa_ref_guard="advisory",
+    )
+    assert len(result.records) == 1
+    assert "quality_guard" not in result.records[0].get("metadata", {})
+    assert result.guard_flagged == 0
+
+
+def test_normalise_partially_resolved_refs_row_is_still_flagged():
+    row = _ref_row({
+        "has_external_refs": True,
+        "resolved_refs": {"eq:x": "E=mc^2"},
+        "unresolved_refs": ["eq:y"],
+    })
+    result = realmath_scrape.normalise(
+        {"source_name": "s", "candidates": [row]}, qa_ref_guard="advisory",
+    )
+    assert result.records[0]["metadata"]["quality_guard"]["unresolved_external_refs"] is True
+
+
+def test_normalise_refuses_unknown_qa_ref_guard_value():
+    with pytest.raises(ValueError, match="qa_ref_guard"):
+        realmath_scrape.normalise(
+            {"source_name": "s", "candidates": []}, qa_ref_guard="paranoid",
+        )
+
+
+def test_normalise_elision_signals_attach_advisory_on_a_hole_bigram_row():
+    row = _upstream_row(question="The solution of, must vanish at infinity.")
+    result = _normalise([row])
+    signals = result.records[0]["metadata"]["quality_guard"]["elision_signals"]
+    assert signals.get("solution_of_comma") == 1
+    assert result.guard_flagged == 1
+
+
+def test_normalise_elision_signals_apply_even_when_ref_guard_is_off():
+    """E4 is independent of the qa_ref_guard policy: always-on advisory."""
+    row = _upstream_row(question="The solution of, must vanish at infinity.")
+    result = realmath_scrape.normalise(
+        {"source_name": "s", "candidates": [row]}, qa_ref_guard="off",
+    )
+    assert result.records[0]["metadata"]["quality_guard"]["elision_signals"]
+    assert result.guard_flagged == 1
+
+
+def test_normalise_elision_signals_never_quarantine_on_their_own():
+    row = _upstream_row(question="The solution of, must vanish at infinity.")
+    result = realmath_scrape.normalise(
+        {"source_name": "s", "candidates": [row]}, qa_ref_guard="strict",
+    )
+    assert result.quarantined == []
+    assert len(result.records) == 1
+
+
+def test_normalise_merges_ref_guard_and_elision_signals_in_one_block():
+    row = _ref_row(
+        {"has_external_refs": True, "unresolved_refs": ["eq:x"]},
+        question="The solution of, is unique.",
+    )
+    result = realmath_scrape.normalise(
+        {"source_name": "s", "candidates": [row]}, qa_ref_guard="advisory",
+    )
+    guard = result.records[0]["metadata"]["quality_guard"]
+    assert guard["unresolved_external_refs"] is True
+    assert guard["elision_signals"]["solution_of_comma"] == 1
+    assert result.guard_flagged == 1  # one row flagged, not double-counted
+
+
+def test_normalise_clean_row_gets_no_quality_guard_block():
+    result = _normalise([_upstream_row()])
+    assert "quality_guard" not in result.records[0].get("metadata", {})
+    assert result.guard_flagged == 0
+
+
+@pytest.mark.parametrize(
+    "text,pattern_name",
+    [
+        ("The solution of, must vanish.", "solution_of_comma"),
+        ("A subsolution to; is bounded.", "solution_of_comma"),
+        ("A solution of such that data is given.", "solution_of_conjunction"),
+        ("A solution to with prescribed data.", "solution_of_conjunction"),
+        ("Consider the system - with initial data.", "system_dash"),
+        ("Consider the system — and boundary data.", "system_dash"),
+        ("The assumptions and hold throughout.", "assumptions_hold"),
+        ("The assumption be satisfied everywhere.", "assumptions_hold"),
+        (r"a weak solution of, \begin{equation}", "dangling_preposition_equation"),
+    ],
+)
+def test_elision_signals_detects_each_hole_bigram(text, pattern_name):
+    signals = realmath_scrape.elision_signals(text)
+    assert signals.get(pattern_name) == 1
+
+
+def test_elision_signals_is_empty_for_clean_prose():
+    assert realmath_scrape.elision_signals("A clean, self-contained statement.") == {}
+
+
+def test_elision_signals_handles_none_and_empty_input():
+    assert realmath_scrape.elision_signals("") == {}
+    assert realmath_scrape.elision_signals(None) == {}

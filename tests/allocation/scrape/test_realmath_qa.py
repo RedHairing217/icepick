@@ -171,6 +171,129 @@ def test_qa_extractor_extracted_answer_defers_to_the_judge():
     assert all(c["provenance"] == "extracted" and c["truth_policy"] == "extracted" for c in candidates)
 
 
+def test_qa_extractor_generator_input_is_theorem_prefixed_for_clean_rows():
+    """E5: with no resolved refs, the generator's input is EXACTLY
+    f"Theorem:\\n{statement}", byte-identical to what it always was —
+    this is also what checkpoint.caching_generator hashes, so the cache
+    key for a clean row is untouched by the ref-resolution feature."""
+    captured = []
+
+    def generator(statement):
+        captured.append(statement)
+        return None
+
+    source.qa_extractor(_paper(), source_fetcher=_source_fetcher, generator=generator)
+    assert captured == [
+        "Theorem:\nThe number of primes below ten is four.",
+        "Theorem:\nEvery finite integral domain is a field.",
+    ]
+
+
+def test_qa_extractor_generator_input_is_extended_for_resolved_refs():
+    """A theorem whose \\eqref resolved to another environment's content gets
+    that content appended to the generator's input, so it can pose a
+    self-contained problem instead of paraphrasing over the stripped hole."""
+    tex = (
+        r"\begin{equation}\label{eq:x} E=mc^2 \end{equation}"
+        r"\begin{theorem}The energy satisfies \eqref{eq:x}.\end{theorem}"
+    )
+
+    def fetcher(arxiv_id):
+        return _targz({"main.tex": tex})
+
+    captured = []
+
+    def generator(statement):
+        captured.append(statement)
+        return {"question": "Q?", "answer": "4"}
+
+    source.qa_extractor(_paper(), source_fetcher=fetcher, generator=generator)
+    assert captured == [
+        "Theorem:\nThe energy satisfies.\n\n"
+        "Referenced content (resolved from the same paper):\n"
+        "(eq:x): E=mc^2"
+    ]
+
+
+def test_qa_extractor_propagates_ref_signal_metadata():
+    """The miner's ref signals must survive qa_extractor's metadata rebuild —
+    today has_external_refs (and, pre-E5, nothing else) is silently dropped."""
+    tex = (
+        r"\begin{equation}\label{eq:x} E=mc^2 \end{equation}"
+        r"\begin{theorem}The energy satisfies \eqref{eq:x}.\end{theorem}"
+    )
+
+    def fetcher(arxiv_id):
+        return _targz({"main.tex": tex})
+
+    [c] = source.qa_extractor(
+        _paper(), source_fetcher=fetcher,
+        generator=lambda s: {"question": "Q?", "answer": "4"},
+    )
+    md = c["metadata"]
+    assert md["has_external_refs"] is True
+    assert "\\eqref{eq:x}" in md["source_statement_raw"]
+    assert md["resolved_refs"] == {"eq:x": "E=mc^2"}
+    assert "unresolved_refs" not in md
+    # source_statement semantics are unchanged: the cleaned statement the
+    # generator saw the CORE of (before any ref extension), not the extended
+    # generator input above.
+    assert md["source_statement"] == "The energy satisfies."
+
+
+def test_qa_extractor_propagates_unresolved_refs_metadata():
+    tex = r"\begin{theorem}See~\eqref{eq:ghost}.\end{theorem}"
+
+    def fetcher(arxiv_id):
+        return _targz({"main.tex": tex})
+
+    [c] = source.qa_extractor(
+        _paper(), source_fetcher=fetcher,
+        generator=lambda s: {"question": "Q?", "answer": "4"},
+    )
+    md = c["metadata"]
+    assert md["has_external_refs"] is True
+    assert md["unresolved_refs"] == ["eq:ghost"]
+    assert "resolved_refs" not in md
+
+
+def test_qa_extractor_cache_key_stable_for_clean_distinguishes_resolved_refs(tmp_path):
+    """E5's NOTE: the per-run QA cache (checkpoint.caching_generator) hashes
+    whatever qa_extractor passes to the generator. A clean row's key must
+    stay a pure function of "Theorem:\\n" + statement (untouched by this
+    feature); a resolved-refs row must hash differently — otherwise a stale
+    cache entry keyed on the bare statement could serve an answer generated
+    without the resolved content."""
+    import json
+
+    from icepick.allocation.scrape.checkpoint import ScrapeCheckpoint, _statement_key
+
+    tex = (
+        r"\begin{equation}\label{eq:x} E=mc^2 \end{equation}"
+        r"\begin{theorem}The energy satisfies \eqref{eq:x}.\end{theorem}"
+        r"\begin{lemma}Every finite integral domain is a field.\end{lemma}"
+    )
+
+    def fetcher(arxiv_id):
+        return _targz({"main.tex": tex})
+
+    def generator(statement, **kwargs):
+        return {"question": "Q?", "answer": "4"}
+
+    checkpoint = ScrapeCheckpoint(tmp_path / "_progress")
+    wrapped = checkpoint.caching_generator(generator)
+    source.qa_extractor(_paper(), source_fetcher=fetcher, generator=wrapped)
+
+    cache_path = tmp_path / "_progress" / "qa_cache.jsonl"
+    keys = [json.loads(line)["key"] for line in cache_path.read_text().splitlines()]
+
+    clean_key = _statement_key("Theorem:\nEvery finite integral domain is a field.")
+    ref_key_if_untouched = _statement_key("Theorem:\nThe energy satisfies.")
+    assert clean_key in keys                    # clean row: pure function of the statement
+    assert ref_key_if_untouched not in keys      # ref row: NOT what its bare form would hash to
+    assert len(set(keys)) == len(keys) == 2      # two theorems, two distinct keys
+
+
 def test_extractor_for_selects_qa():
     assert source.extractor_for("qa") is source.qa_extractor
 

@@ -70,6 +70,7 @@ from icepick.contracts.records import TRUTH_POLICY_VALUES
 # identical for both sources.
 from icepick.allocation.adapters.realmath_scrape import (
     CANDIDATES_PER_PAPER,
+    DEFAULT_QA_REF_GUARD,
     ESTIMATE_SAFETY_MULTIPLIER,
     NormaliseResult,  # noqa: F401  (re-exported so callers get the same type)
     PAPERS_PER_RECORD,
@@ -217,7 +218,7 @@ def estimate(plan):
     }
 
 
-def run(manifest, *, now: Optional[datetime] = None):
+def run(manifest, *, now: Optional[datetime] = None, qa_ref_guard: str = DEFAULT_QA_REF_GUARD):
     """Execute an approved bulk acquisition run.
 
     Every gate — source type, mode, approval, call budget, output
@@ -226,6 +227,7 @@ def run(manifest, *, now: Optional[datetime] = None):
     ``production`` drives the S3 bulk pipeline from ``scrape_window`` (parse the
     src manifest, select chunks, index categories, extract + mine per chunk).
     Both funnel raw candidates through the shared normalise + run-layout writer.
+    ``qa_ref_guard`` (see ``realmath_scrape.normalise``) passes straight through.
     """
     _validate_manifest(manifest)
     run_dir = run_dir_for(manifest)
@@ -238,6 +240,7 @@ def run(manifest, *, now: Optional[datetime] = None):
             calibration_replay=True,
             report_title="arXiv bulk source report",
             now=now,
+            qa_ref_guard=qa_ref_guard,
         )
 
     result, checkpoint = _bulk_acquire(manifest, run_dir)
@@ -288,6 +291,7 @@ def run(manifest, *, now: Optional[datetime] = None):
         surplus=result["surplus"],
         report_title="arXiv bulk source report",
         now=now,
+        qa_ref_guard=qa_ref_guard,
     )
     if not result["interrupted"]:
         checkpoint.mark_complete()

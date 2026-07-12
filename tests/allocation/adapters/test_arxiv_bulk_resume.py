@@ -228,7 +228,9 @@ def test_ctrl_c_mid_run_is_resumable_without_redoing_work(tmp_path, monkeypatch)
 
     # chunk 001 journaled after committing its paper; chunk 002 never fetched.
     assert downloads == ["src/arXiv_src_2501_001.tar"]
-    assert qa_calls == ["Solution count for one is one."]
+    # qa_extractor frames every generator input as "Theorem:\n<statement>"
+    # (extended further when a theorem's refs resolve to other content).
+    assert qa_calls == ["Theorem:\nSolution count for one is one."]
 
     # Second invocation of the SAME manifest: completes without re-downloading
     # chunk 001, re-mining paper one, or re-calling its cached QA.
@@ -244,7 +246,7 @@ def test_ctrl_c_mid_run_is_resumable_without_redoing_work(tmp_path, monkeypatch)
     # Chunk 001 NOT re-downloaded (journaled); only chunk 002 fetched now.
     assert downloads == ["src/arXiv_src_2501_002.tar"]
     # Paper one's QA served from the cache — only paper two calls the generator.
-    assert qa_calls == ["Solution count for two is two."]
+    assert qa_calls == ["Theorem:\nSolution count for two is two."]
     assert "Resumed: 1 papers served from the checkpoint" in second.report_path.read_text()
 
 
@@ -274,7 +276,7 @@ def test_exhausted_budget_pauses_and_resumes(tmp_path, monkeypatch):
     assert second.record_count == 2
     assert second.acquisition["resumed_papers"] == 1
     assert downloads == ["src/arXiv_src_2501_002.tar"]  # chunk one not re-downloaded
-    assert qa_calls == ["Solution count for two is two."]  # paper one's QA cached
+    assert qa_calls == ["Theorem:\nSolution count for two is two."]  # paper one's QA cached
 
 
 def test_budget_exhausted_during_index_build_pauses_cleanly(tmp_path, monkeypatch):
