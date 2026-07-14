@@ -48,7 +48,17 @@ def build_backend(cfg: PassAtKConfig):
     if cfg.backend == BACKEND_QWEN_HTTP:
         from icepick.processing.pass_at_k.backends.qwen_http import QwenHttpBackend
 
-        return QwenHttpBackend(url=cfg.backend_url, model=cfg.resolved_model)
+        # AUTH requirement, not a spend risk: unlike the paid backends
+        # below, this key is never gated behind allow_live_calls. The
+        # local endpoint stays keyless (qwen_key_file=None -> api_key=None,
+        # byte-for-byte the old behavior); a remote gateway just needs its
+        # bearer header attached.
+        api_key = (
+            _read_raw_or_env_key(cfg.qwen_key_file) if cfg.qwen_key_file else None
+        )
+        return QwenHttpBackend(
+            url=cfg.backend_url, model=cfg.resolved_model, api_key=api_key
+        )
     if cfg.backend == BACKEND_ANTHROPIC:
         from icepick.processing.pass_at_k.backends.anthropic import AnthropicBackend
 
@@ -104,3 +114,50 @@ def _load_env_file(path) -> None:
         value = value.strip().strip('"').strip("'")
         # Don't overwrite anything already set in the environment.
         os.environ.setdefault(key, value)
+
+
+def _read_raw_or_env_key(path) -> str:
+    """Read a bearer key for a remote qwen_http gateway (e.g. Admiral
+    Tangerine fronting LM Studio behind an API key).
+
+    Two accepted formats, auto-detected from content:
+      - dotenv-style ``KEY=VALUE`` lines (``#`` comments and blank lines
+        skipped): returns ``QWEN_API_KEY`` or ``TANGERINE_API_KEY`` if
+        either is present, else the first key defined in the file.
+      - a bare raw token with no ``=`` anywhere (e.g. a
+        ``tangerine_api.env`` containing nothing but the token, no
+        trailing newline): the whole stripped file contents ARE the key.
+
+    Deliberately NOT ``_load_env_file``: that loader silently skips any
+    line without ``=``, which would drop a bare token on the floor.
+    """
+    from pathlib import Path
+
+    path = Path(path)
+    if not path.exists():
+        raise RuntimeError(f"qwen key file not found: {path}")
+    text = path.read_text(encoding="utf-8")
+    if not text.strip():
+        raise RuntimeError(f"qwen key file is empty: {path}")
+
+    pairs: dict[str, str] = {}
+    order: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key not in pairs:
+            pairs[key] = value
+            order.append(key)
+
+    if pairs:
+        for preferred in ("QWEN_API_KEY", "TANGERINE_API_KEY"):
+            if preferred in pairs:
+                return pairs[preferred]
+        return pairs[order[0]]
+
+    # No `key=value` line anywhere: the file is one bare raw token.
+    return text.strip()

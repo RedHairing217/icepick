@@ -20,8 +20,16 @@ icepick loses up to k rollouts (one full record's batch). Local Qwen
 costs no money either way, and a resume re-runs the interrupted record
 from scratch.
 
-No API key and no kill switch: the endpoint is local and costs nothing
-per call (see the config module docstring for the rationale).
+Optional API key, no kill switch: the default endpoint is local (LM
+Studio et al.) and costs nothing per call, so no key is required —
+``api_key=None`` sends no auth header and the local path is unchanged.
+When ``api_key`` is set (resolved from ``--qwen-key-file``), every
+request instead carries an ``Authorization: Bearer <token>`` header,
+which lets this backend also target a remote OpenAI-compatible gateway
+sitting behind bearer auth (e.g. Admiral Tangerine fronting LM Studio).
+There is still no kill switch here: the key is an auth requirement, not
+a spend risk, so it is exempt from the paid-backend gating described in
+the config module docstring.
 """
 
 from __future__ import annotations
@@ -34,9 +42,10 @@ class QwenHttpBackend:
 
     name = "qwen_http"
 
-    def __init__(self, url: str, model: str):
+    def __init__(self, url: str, model: str, api_key: str | None = None):
         self.url = url
         self.model = model
+        self.api_key = api_key  # None for local/keyless endpoints; see module docstring
         self._input_tokens = 0
         self._output_tokens = 0
 
@@ -71,7 +80,13 @@ class QwenHttpBackend:
         }
         outputs = []
         for _ in range(k):
-            r = requests.post(self.url, json=payload, timeout=timeout)
+            # Only add the Authorization header when a key is configured —
+            # the no-key call below is byte-for-byte what this backend has
+            # always sent, so the local/keyless path stays unchanged.
+            post_kwargs = {"timeout": timeout}
+            if self.api_key:
+                post_kwargs["headers"] = {"Authorization": f"Bearer {self.api_key}"}
+            r = requests.post(self.url, json=payload, **post_kwargs)
             r.raise_for_status()
             data = r.json()
             # OpenAI-compatible servers report prompt_/completion_tokens;

@@ -83,6 +83,7 @@ class PassAtKConfig:
     anthropic_key_file: Optional[Path] = None
     openai_key_file: Optional[Path] = None
     backend_url: Optional[str] = None  # qwen_http only
+    qwen_key_file: Optional[Path] = None  # enables bearer auth for a remote qwen_http gateway; local endpoints leave this None
     allow_live_calls: bool = False  # kill switch #1: paid backends refuse production without it
     # Kill switch #2: policy states pass@k runs against qwen_http only.
     # Selecting a paid backend requires BOTH flags — operators explicitly

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from icepick.processing.pass_at_k.backends import build_backend
+from icepick.processing.pass_at_k.backends import _read_raw_or_env_key, build_backend
 from icepick.processing.pass_at_k.backends.anthropic import AnthropicBackend
 from icepick.processing.pass_at_k.backends.openai import OpenAIBackend
 from icepick.processing.pass_at_k.backends.qwen_http import QwenHttpBackend
@@ -52,8 +52,12 @@ class _FakeRequests(types.SimpleNamespace):
         self._responses = list(responses)
         self.calls = []
 
-    def post(self, url, json=None, timeout=None):
-        self.calls.append({"url": url, "json": json, "timeout": timeout})
+    def post(self, url, json=None, timeout=None, **kwargs):
+        # **kwargs (rather than a declared headers=None) means "headers"
+        # only shows up in the recorded call when the caller actually
+        # passed it — lets tests assert its total absence, not just None.
+        call = {"url": url, "json": json, "timeout": timeout, **kwargs}
+        self.calls.append(call)
         resp = self._responses.pop(0)
         if isinstance(resp, Exception):
             raise resp
@@ -123,6 +127,27 @@ def test_qwen_usage_accumulates_and_tolerates_missing_usage(fake_requests):
     backend.call("q", k=2, temperature=0.7, max_tokens=64, think=False, timeout=5.0)
     backend.call("q2", k=1, temperature=0.7, max_tokens=64, think=False, timeout=5.0)
     assert backend.usage() == {"input_tokens": 13, "output_tokens": 7}
+
+
+def test_qwen_sends_bearer_header_when_api_key_set(fake_requests):
+    """Remote-gateway path: a configured api_key rides as a bearer header
+    on every rollout request."""
+    fake = fake_requests([_Resp(), _Resp()])
+    backend = QwenHttpBackend(url=URL, model="m", api_key="tok-secret-123")
+    backend.call("q", k=2, temperature=0.7, max_tokens=64, think=False, timeout=5.0)
+    assert len(fake.calls) == 2
+    for call in fake.calls:
+        assert call["headers"] == {"Authorization": "Bearer tok-secret-123"}
+
+
+def test_qwen_sends_no_auth_header_when_api_key_is_none(fake_requests):
+    """Backward-compat: the default (no api_key) call is byte-for-byte the
+    pre-auth shape — no headers kwarg reaches requests.post at all, so a
+    local/keyless endpoint sees zero behavior change."""
+    fake = fake_requests([_Resp()])
+    backend = QwenHttpBackend(url=URL, model="m")  # api_key defaults to None
+    backend.call("q", k=1, temperature=0.7, max_tokens=64, think=False, timeout=5.0)
+    assert "headers" not in fake.calls[0]
 
 
 # --- fake SDKs (anthropic / openai) -------------------------------------------
@@ -297,3 +322,105 @@ def test_build_backend_flow_testing_raises():
     cfg = PassAtKConfig(mode="flow_testing", calibration_sheet=Path("sheet.jsonl"))
     with pytest.raises(RuntimeError, match="calibration sheet"):
         build_backend(cfg)
+
+
+# --- qwen_http optional bearer auth (remote gateway) --------------------------
+
+
+def test_passatk_config_qwen_key_file_defaults_to_none():
+    """Local endpoints never set this — the field must default to None so
+    existing configs/CLIs that omit it are unaffected."""
+    cfg = PassAtKConfig()
+    assert cfg.qwen_key_file is None
+
+
+def test_build_backend_qwen_http_api_key_none_when_no_key_file():
+    cfg = PassAtKConfig(backend="qwen_http", backend_url=URL)
+    backend = build_backend(cfg)
+    assert backend.api_key is None
+
+
+def test_build_backend_qwen_http_wires_key_file_to_api_key(tmp_path):
+    key_file = tmp_path / "tangerine_api.env"
+    key_file.write_text("sk-remote-tangerine-999", encoding="utf-8")
+    cfg = PassAtKConfig(backend="qwen_http", backend_url=URL, qwen_key_file=key_file)
+    backend = build_backend(cfg)
+    assert isinstance(backend, QwenHttpBackend)
+    assert backend.api_key == "sk-remote-tangerine-999"
+
+
+def test_build_backend_qwen_http_key_file_not_gated_by_allow_live_calls(tmp_path):
+    """The qwen key is an AUTH requirement, not a spend risk: unlike the
+    paid backends (see test_kill_switch_off_uses_placeholder_and_never_reads_key_files),
+    it must resolve to the real token even with allow_live_calls left at
+    its False default — kill switch #1 does not apply to qwen_http."""
+    key_file = tmp_path / "tangerine_api.env"
+    key_file.write_text("sk-remote-tangerine-999", encoding="utf-8")
+    cfg = PassAtKConfig(
+        backend="qwen_http",
+        backend_url=URL,
+        qwen_key_file=key_file,
+        allow_live_calls=False,
+    )
+    backend = build_backend(cfg)
+    assert backend.api_key == "sk-remote-tangerine-999"  # not the "[API key]" placeholder
+
+
+# --- _read_raw_or_env_key: raw-token or dotenv key file reader ----------------
+
+
+def test_read_raw_or_env_key_bare_token_no_trailing_newline(tmp_path):
+    """Mimics the real tangerine_api.env: a single raw token, no VAR=
+    prefix, no trailing newline."""
+    key_file = tmp_path / "tangerine_api.env"
+    key_file.write_bytes(b"sk-tangerine-raw-token-xyz")
+    assert _read_raw_or_env_key(key_file) == "sk-tangerine-raw-token-xyz"
+
+
+def test_read_raw_or_env_key_dotenv_style_returns_value(tmp_path):
+    key_file = tmp_path / "keys.env"
+    key_file.write_text("# comment\nQWEN_API_KEY=sk-qwen-abc\n", encoding="utf-8")
+    assert _read_raw_or_env_key(key_file) == "sk-qwen-abc"
+
+
+def test_read_raw_or_env_key_dotenv_prefers_tangerine_var_over_others(tmp_path):
+    key_file = tmp_path / "keys.env"
+    key_file.write_text(
+        "SOME_OTHER_VAR=nope\nTANGERINE_API_KEY=sk-tangerine-456\n", encoding="utf-8"
+    )
+    assert _read_raw_or_env_key(key_file) == "sk-tangerine-456"
+
+
+def test_read_raw_or_env_key_dotenv_prefers_qwen_var_over_first_key(tmp_path):
+    key_file = tmp_path / "keys.env"
+    key_file.write_text(
+        "FIRST_VAR=ignored\nQWEN_API_KEY=sk-qwen-preferred\n", encoding="utf-8"
+    )
+    assert _read_raw_or_env_key(key_file) == "sk-qwen-preferred"
+
+
+def test_read_raw_or_env_key_dotenv_falls_back_to_first_key(tmp_path):
+    """No QWEN_API_KEY/TANGERINE_API_KEY var present: the first KEY=VALUE
+    line in the file wins."""
+    key_file = tmp_path / "keys.env"
+    key_file.write_text("RANDOM_VAR=sk-first-789\nANOTHER=ignored\n", encoding="utf-8")
+    assert _read_raw_or_env_key(key_file) == "sk-first-789"
+
+
+def test_read_raw_or_env_key_missing_file_raises(tmp_path):
+    with pytest.raises(RuntimeError, match="not found"):
+        _read_raw_or_env_key(tmp_path / "does-not-exist.env")
+
+
+def test_read_raw_or_env_key_empty_file_raises(tmp_path):
+    key_file = tmp_path / "empty.env"
+    key_file.write_text("", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="empty"):
+        _read_raw_or_env_key(key_file)
+
+
+def test_read_raw_or_env_key_whitespace_only_file_raises(tmp_path):
+    key_file = tmp_path / "whitespace.env"
+    key_file.write_text("   \n\n  ", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="empty"):
+        _read_raw_or_env_key(key_file)
