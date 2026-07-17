@@ -1,0 +1,8 @@
+{"uid": "u1", "arxiv_id": "9999.00001", "label": "band", "statement": "S1: eval-band record on an eval paper.", "answer": "A1", "n_correct": 3, "n_wrong": 5, "n_degenerate": 0, "pass_at_k": 0.375}
+{"uid": "u2", "arxiv_id": "9999.00001", "label": "solved", "statement": "S2: eval paper, perfect 8/8 solve.", "answer": "A2", "n_correct": 8, "n_wrong": 0, "n_degenerate": 0, "pass_at_k": 1.0}
+{"uid": "u3", "arxiv_id": "9999.00002", "label": "solved", "statement": "S3: eval paper, 7/8 -- solved label but not a perfect anchor.", "answer": "A3", "n_correct": 7, "n_wrong": 1, "n_degenerate": 0, "pass_at_k": 0.875}
+{"uid": "u4", "arxiv_id": "9999.00002", "label": "collapse", "statement": "S4: eval paper, total 0/8 collapse.", "answer": "A4", "n_correct": 0, "n_wrong": 8, "n_degenerate": 0, "pass_at_k": 0.0}
+{"uid": "u5", "arxiv_id": "9999.00002", "label": "misdirection", "statement": "S5: eval paper, 0/8 but a dominant wrong attractor -- misdirection, not collapse.", "answer": "A5", "n_correct": 0, "n_wrong": 8, "n_degenerate": 0, "pass_at_k": 0.0, "top_wrong_share": 0.75}
+{"uid": "u6", "arxiv_id": "9999.00001", "label": "drop", "statement": "S6: eval paper, pre-filtered before scoring.", "answer": "A6", "n_correct": 0, "n_wrong": 0, "n_degenerate": 0, "pass_at_k": null, "drop_reason": "garbage_truth"}
+{"uid": "u7", "arxiv_id": "1000.00001", "label": "band", "statement": "S7: non-eval-paper band record -- belongs in train_uids.", "answer": "A7", "n_correct": 2, "n_wrong": 6, "n_degenerate": 0, "pass_at_k": 0.25}
+{"uid": "u8", "arxiv_id": "1000.00002", "label": "solved", "statement": "S8: non-eval-paper solved record -- not band, excluded from train.", "answer": "A8", "n_correct": 8, "n_wrong": 0, "n_degenerate": 0, "pass_at_k": 1.0}

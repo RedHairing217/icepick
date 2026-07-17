@@ -1,0 +1,10 @@
+{"uid": "e1", "n_correct": 1, "n_wrong": 0, "n_degenerate": 0, "pass_at_k": 1.0}
+{"uid": "e2", "n_correct": 0, "n_wrong": 1, "n_degenerate": 0, "pass_at_k": 0.0}
+{"uid": "e3", "n_correct": 0, "n_wrong": 1, "n_degenerate": 0, "pass_at_k": 0.0}
+{"uid": "e4", "n_correct": 0, "n_wrong": 1, "n_degenerate": 0, "pass_at_k": 0.0}
+{"uid": "e5", "n_correct": 1, "n_wrong": 0, "n_degenerate": 0, "pass_at_k": 1.0}
+{"uid": "e6", "n_correct": 0, "n_wrong": 1, "n_degenerate": 0, "pass_at_k": 0.0}
+{"uid": "s1", "n_correct": 1, "n_wrong": 0, "n_degenerate": 0, "pass_at_k": 1.0}
+{"uid": "s2", "n_correct": 1, "n_wrong": 0, "n_degenerate": 0, "pass_at_k": 1.0}
+{"uid": "f1", "n_correct": 0, "n_wrong": 1, "n_degenerate": 0, "pass_at_k": 0.0}
+{"uid": "f2", "n_correct": 0, "n_wrong": 1, "n_degenerate": 0, "pass_at_k": 0.0}

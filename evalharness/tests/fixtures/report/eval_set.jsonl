@@ -1,0 +1,10 @@
+{"uid": "e1", "arxiv_id": "9999.00001", "eval_slice": "eval_band", "statement": "S-e1", "answer": "A-e1"}
+{"uid": "e2", "arxiv_id": "9999.00001", "eval_slice": "eval_band", "statement": "S-e2", "answer": "A-e2"}
+{"uid": "e3", "arxiv_id": "9999.00001", "eval_slice": "eval_band", "statement": "S-e3", "answer": "A-e3"}
+{"uid": "e4", "arxiv_id": "9999.00002", "eval_slice": "eval_band", "statement": "S-e4", "answer": "A-e4"}
+{"uid": "e5", "arxiv_id": "9999.00002", "eval_slice": "eval_band", "statement": "S-e5", "answer": "A-e5"}
+{"uid": "e6", "arxiv_id": "9999.00002", "eval_slice": "eval_band", "statement": "S-e6", "answer": "A-e6"}
+{"uid": "s1", "arxiv_id": "9999.00001", "eval_slice": "anchor_solved", "statement": "S-s1", "answer": "A-s1"}
+{"uid": "s2", "arxiv_id": "9999.00002", "eval_slice": "anchor_solved", "statement": "S-s2", "answer": "A-s2"}
+{"uid": "f1", "arxiv_id": "9999.00001", "eval_slice": "anchor_fail", "statement": "S-f1", "answer": "A-f1"}
+{"uid": "f2", "arxiv_id": "9999.00002", "eval_slice": "anchor_fail", "statement": "S-f2", "answer": "A-f2"}

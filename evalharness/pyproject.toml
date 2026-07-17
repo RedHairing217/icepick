@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evalharness"
+version = "0.1.0"
+description = "LoRA eval harness for qwen3-8b on the pde625 band corpus: frozen paper-level split, greedy pass@1 + k=8 distributional comparison, exact McNemar significance. See docs/eval_harness_design.md in the parent icepick repo."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+evalharness-build-set = "evalharness.build_eval_set:main"
+evalharness-run = "evalharness.run_eval:main"
+evalharness-report = "evalharness.report:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

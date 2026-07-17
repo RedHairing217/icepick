@@ -1,0 +1,2 @@
+{"uid": "u1", "arxiv_id": "9999.00001", "label": "band", "statement": "DUPLICATE of u1 -- must be ignored in favor of the tier1 occurrence.", "answer": "DUPLICATE", "n_correct": 1, "n_wrong": 7, "n_degenerate": 0, "pass_at_k": 0.125}
+{"uid": "u9", "arxiv_id": "9999.00001", "label": "band", "statement": "S9: a second eval-band record, found only in tier2.", "answer": "A9", "n_correct": 4, "n_wrong": 4, "n_degenerate": 0, "pass_at_k": 0.5}
