@@ -65,3 +65,68 @@ Rebuild the eval set from the committed split via `evalharness-build-set`; the c
 itself never leaves the machine.
 
 Box cost, entire campaign (setup, smoke, 3 seeds): ≈ **$3**.
+
+## 2026-07-28 — adjudicated corrections to the run-1 configuration record
+
+Two independent reviews of the training arm were merged and receipt-verified on
+2026-07-28 (full detail: `docs/lora_params_rationale.md`). Four findings qualify how
+the run-1 setup table above should be read; none retroactively changes a measured
+number, but all four are inherited unchanged by any rerun that reuses
+`train_qwen3_lora.py` / the W2 dataset build as-is:
+
+1. **Full-sequence loss.** The trainer pre-templates rows to `{"text": …}` and sets
+   no masking, so ~21.6% of trained characters are the (identical) system prompt +
+   user text, not assistant output. Fix is prompt/completion columns
+   (completion-only loss is the trl 0.29.1 default path), NOT
+   `assistant_only_loss` (requires a `{% generation %}` chat template Qwen3 lacks).
+2. **Gradient weight = `n_correct`.** One example per verified-correct trace means a
+   record's gradient mass is proportional to how often the BASE model already solved
+   it (anti-difficulty). The seven 7-trace records are exactly the GGUF-7/8
+   backfill. Structural — scales to N≈1000 untouched.
+3. **Silent knobs.** `gradient_accumulation_steps=4` is hardcoded (effective batch
+   16, unrecorded in run manifests); scheduler/warmup/decay are unrecorded TRL
+   defaults (linear→0, none, none).
+4. **Loss floors immediately** (0.71 → ~0.45 within the first steps; final ~0.43).
+   Targets are the base model's own rollouts, so "0.43 = room to fit" reasoning is
+   invalid — more epochs buy sharpening, not fitting headroom.
+
+## Stage A — hyperparameter screen (2026-07-27/28, complete)
+
+Screen design: 6 configs × 1 shared seed (20260728), trained on a 160-record
+tune-train carve (565 rollouts) and read on a 40-record paper-disjoint val set —
+the 100-record holdout untouched. Greedy pass@1, same engine parity as run 1.
+Selection rule pre-declared: ties → control.
+
+| config | deviation from control | val solved /40 |
+|---|---|---|
+| base (no adapter) | — | 20 |
+| C0 | none (r16 α32 lr1e-4 3ep) | **21** |
+| C1 | lr 2e-4 | 15 |
+| C2 | lr 5e-5 | 17 |
+| C3 | 6 epochs | 15 |
+| C4 | r32 α64 | 18 |
+| C5 | lr 2e-4 + 6 epochs | 12 |
+
+Every deviation scored below control numerically, but per the 2026-07-28 analysis
+adjudication no arm difference is significant (best p=.077 for C5; screen SE ±9.3pp):
+the screen supports exactly one statement — **no gross win exists among the tested
+knobs** — and cannot rank arms or establish flatness. C1–C5 are unrefuted, not
+refuted. Consequence: **stage R (replication) uses the unmodified control config**
+(pre-declared tie rule: ties → control).
+
+## Stage R + 8-seed consistency verdict (2026-07-28) — supersedes the 3-seed verdict above
+
+Five additional seeds (20260725/26/27/29/30) of the byte-identical control config were
+trained on the same box (train-time metrics indistinguishable across all 8 seeds:
+loss .4302–.4364, token accuracy .869–.882) and evaluated with the identical parity
+protocol. Full analysis: `docs/lora_consistency_verdict.md` (the campaign deliverable)
++ refreshed `out/analysis/lora_{consistency,sensitivity}_analysis.json`.
+
+**Headline: deltas {+11, +1, +3, 0, +3, +1, +4, +1} — 7 positive / 0 negative / 1 tie.
+Sign test p = .0156 (pre-registered primary); t(7) = 2.421 p = .046, 95% CI
+[+0.07, +5.93]. Robust to dropping the +11 outlier (sign p = .031, t p = .015,
+mean +1.86pp). The "run-1 verdict: not demonstrated" above is superseded: a small,
+consistent, causally attributable improvement IS demonstrated at n=8** — on a recipe
+whose two known dataset defects (full-sequence loss, weight = n_correct) remain
+unfixed, i.e. the effect exists despite them. Variance ratio at k=8 = 0.95 (p=.47):
+seed spread is measurement noise; adapters are statistically interchangeable.
