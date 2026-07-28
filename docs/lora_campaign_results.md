@@ -28,21 +28,33 @@ Baseline (base model): **43/100**.
 |---|---|---|---|---|---|
 | 20260722 | **54/100** | **+11.0pp** | 9 / 20 | 0.061 | 1 / 1 |
 | 20260723 | **44/100** | **+1.0pp** | 18 / 19 | 1.0 | 2 / 1 |
-| 20260724 | *(eval in flight at time of writing — appended on completion)* | | | | |
+| 20260724 | **46/100** | **+3.0pp** | 16 / 19 | 0.736 | 1 / 0 |
+
+**Aggregate: mean Δ = +5.0pp (spread +1 to +11); all three seeds positive; none
+individually significant.**
 
 Training quality was near-identical across seeds (loss 0.431 vs 0.433, token accuracy
 87.9% vs 86.9%, same token count) — the outcome spread is **generalization variance
 between seeds**, not a training failure.
 
-## Honest read (pending seed 3)
+## Verdict (final, 3 seeds)
 
-- Seed 1 alone (+11pp, p=0.061) would have been an overclaim; the multi-seed design
-  caught it. Seed-to-seed spread (+11 vs +1) is as large as the candidate effect.
-- Anchor flags are 1–2/10 per arm — within noise at n=10, watched across seeds.
-  Paper-level train/eval disjointness makes memorization of eval items impossible by
-  construction, so anchor-fail flips are generalization-or-noise, not leakage.
-- Seed 3 arbitrates: consistent +8–14pp across seeds would be strong evidence; a
-  +1-like repeat means the true mean effect is small and run-dependent at 200 examples.
+**Not demonstrated at this training scale.** Mean +5.0pp is directionally positive
+(3/3 seeds), but no seed reaches significance and the seed-to-seed spread (10pp) is
+twice the mean effect. A 200-example LoRA moves this model's holdout performance by
+an amount dominated by training-run luck. Seed 1 alone (+11pp, p=0.061) would have
+been an overclaim — the multi-seed protocol caught it, which is precisely the
+"survives scrutiny" property this harness was built for.
+
+Secondary observations: anchor flags stayed at 1–2/10 per seed (noise-level; no
+forgetting or contamination trend — and paper-disjointness rules out memorization by
+construction). Discordant churn was high in every seed (~30-37 pairs), i.e. the
+adapter meaningfully reshuffles WHICH problems solve even when the net gain is small.
+
+**Obvious next experiment:** scale the training set. The corpus machinery (autopilot
+batches + bulk months) can grow band well past 300; re-running this exact pipeline at
+N≈1000 examples tests whether the +5pp mean is a floor that grows with data or a
+ceiling. The harness, guards, runbook, and box recipe are all reusable as-is.
 
 ## Reproduction
 
