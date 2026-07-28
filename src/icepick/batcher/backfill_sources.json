@@ -1,0 +1,110 @@
+[
+  {
+    "label": "batch0",
+    "path": "out/processing_20260704T084339Z/input_records.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "batch0_surplus",
+    "path": "out/intake/runs/20260704T084339Z/handoff/surplus_records.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "batch1",
+    "path": "out/intake/runs/20260704T190925Z/handoff/records.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "batch2",
+    "path": "out/intake/runs/20260704T215746Z/handoff/records.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "fk33rescue",
+    "path": "out/processing_20260704_fk33rescue/input_fk33.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "fk33_k12recheck",
+    "path": "out/processing_20260704_fk33rescue/input_k12recheck.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "batch3",
+    "path": "out/intake/runs/20260705T031733Z/handoff/records.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "batch4",
+    "path": "out/intake/runs/20260705T230427Z/handoff/records.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "batch5",
+    "path": "out/processing_20260706T173730Z/input_records.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "batch6",
+    "path": "out/intake/runs/20260706T194319Z/handoff/records.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "batch7",
+    "path": "out/intake/runs/20260706T213646Z/handoff/records.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "batch8",
+    "path": "out/processing_20260707T001108Z/input_records.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "batch8_intake_alias",
+    "path": "out/intake/runs/20260707T025320Z/handoff/records.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "stage1rescue",
+    "path": "out/stage1_kill_census/rescue_pass_at_k/rescue_input.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": true
+  },
+  {
+    "label": "pde_all26",
+    "path": "out/processing_pde_all26/input_all26.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "early_071000",
+    "path": "out/intake/runs/20260704T071000Z/handoff/records.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "early_074808",
+    "path": "out/intake/runs/20260704T074808Z/handoff/records.jsonl",
+    "warn_only": false,
+    "expect_has_uid_field": false
+  },
+  {
+    "label": "orphan_045533",
+    "path": "out/intake/runs/20260707T045533Z/handoff/records.jsonl",
+    "warn_only": true,
+    "expect_has_uid_field": false
+  }
+]

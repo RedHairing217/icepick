@@ -85,6 +85,36 @@ without explicit direction.
    degeneracy scanner owns those). Hard-tail mean cost $0.032/billed
    sample, mean ~900 reasoning tok. Advisory-vs-gating for stage 3 is worth
    re-deciding on gpt-5.5 evidence + its ~$20–60/batch price tag.*
+5. **Stage-1 mini kill census (2026-07-07)**: ALL 886 gpt-4.1-mini stage-1
+   kills across 8 runs (b1–b7 + batch8-concluded `20260707T001108Z`; every
+   judge sample disk-verified mini) censused via a stratified 150-record
+   sample (138 random + the 12 human-ruled seeds), 2×opus blind panels +
+   third-ruler adjudication (88% inter-rater), calibration 9/12 PASS (panels
+   lenient on genuine-miss → FK if anything overcounted). **False-kill rate
+   25.4% [18.4%, 33.5%] → ~225 [162, 296] good records killed.** FK = 83%
+   standard-terminology-pedantry; GM = 90% underspecified-external. 2/3-split
+   kills are 50% FK vs 21.7% for unanimous 3/3. Sonnet proxy VALIDATED:
+   P(genuine | Sonnet-agrees-kill) = 88.9% [73.9, 96.9] (b1+2), and Sonnet
+   caught-or-deferred 100% of sampled genuine junk → stage 2 makes stage 1's
+   junk-catching redundant; but Sonnet also re-kills ~60% of stage-1 false
+   kills, so rescue needs panel-grade review, not stage reshuffling (batch-7
+   corroboration: ab_stage1 Sonnet re-kills 84.4%). 44 census-confirmed FKs
+   run through a rescue pass@k by Nicky (gate fired 03:26 PT 07-07, done
+   04:41, $0 local Qwen): 5 solved / 4 band / 3 misdirection / 15 collapse /
+   17 drop; judge-math-error subcat solved 3/4. **FOLDED into corpus
+   2026-07-07 (Nicky "fold the band"): +4 band (108→112), all 44 into
+   wellposed_all (684→728), source_batch stage1rescue_20260707,
+   wellposed_via stage1_false_kill_overturned; fk33-style convention,
+   backups `.bak-pre-stage1rescuefold`, 0 collisions, three files+manifest
+   agree at 112.** Results/tally: `out/stage1_kill_census/rescue_pass_at_k/
+   RESULT.md`. Remaining projected FK among the 736 unruled kills: ~187
+   [135, 246]. Files: `out/stage1_kill_census/{stage1_kill_census.md,
+   census_rulings.jsonl,census_input.jsonl,sampling_frame.json,
+   aggregates.json,rubric.md}`. Open for Nicky: kill/demote stage 1 (quality
+   axis now measured; cost axis was already decided), and rescue path for
+   the ~187 (opus panel sweep ~6M tok · Sonnet triage ~$6–8 + ~1M tok but
+   forfeits ~70 FKs hiding among Sonnet-agreed kills · split/error-first
+   prioritized sweep).
 
 ## Doc architecture (2026-07-06)
 
@@ -141,6 +171,9 @@ lives in AGENTS.md, "Git & shared-checkout discipline".)
    from disk; backups `.bak-pre-batch7fold`). **Corpus `out/corpus_pde625/`
    now 684 well-posed / 108 band** = b1 12 + b2 11 + fk33 5 + b3 10 + b4 24
    + b5 12 + b6 16 + b7 18. `fcb3bcab` still pending (→109 if band).
+   *[Update 2026-07-07: stage-1 census rescue folded +4 band + stage1rescue
+   → **728 well-posed / 112 band** (b… + stage1rescue 4); see finding #5 in
+   "Closed findings" and `rescue_pass_at_k/RESULT.md`. fcb3bcab → 113 if band.]*
 2. **Tier-1 stage-1-redundancy experiment DONE** (approved; $1.17 actual,
    ~24 min). Batch 7's 129 mini-stage-1 kills re-judged by a Sonnet-only
    gate (`--stages codex:anthropic`), `out/ab_stage1/sonnet_on_kills/`:
@@ -159,8 +192,547 @@ lives in AGENTS.md, "Git & shared-checkout discipline".)
    after it reports. `scratch_r1.py` (repo root) is a census-side sympy
    homogeneity check of a Weinstein-type sharp-constant record, committed
    as-is on "commit everything".
+   - **Interim (2026-07-07 ~08:14Z): census stratified-sample result in** —
+     150 records ruled (2-3 independent opus rulers/record, calibrated 9/12
+     vs the human seed set): **44 false_kill / 102 genuine_miss / 4 unclear**.
+     Full aggregation (CIs, extrapolation to the 886-record mini population,
+     memo) still pending, resuming 04:10 local per Nicky's spend-pause order.
+   - **Rescue queued** (Nicky "queue the 44 false kills behind batch 8"): the
+     44 census-confirmed false_kill records → `out/stage1_kill_census/
+     rescue_pass_at_k/rescue_input.jsonl` (schema-matched to `final_corpus.
+     jsonl`). Gated behind batch 8's live pass@k (single-Qwen-slot invariant)
+     via uncommitted `gate_stage1rescue_passk.sh` (repo root, nohup'd/disowned,
+     PID 95831 at launch) — polls `pgrep -f "icepick processing pass_at_k"`
+     every 30s, fires with byte-identical wire params the moment the slot
+     frees. Progress: `out/stage1_kill_census/rescue_pass_at_k/gate.log`.
+     Not yet folded into corpus — that's a separate decision after results.
 4. Git truth at write: unpushed = `a02ce0d` (gpt-5.5 judge refactor) +
    `49d1c3b` (its ledger) + `fc9533c` (arxiv_bulk: real default OAI fetcher,
    parallel session) + this session's commits; `095dc13` and `2ff2b41` ARE
    on origin (the "Working tree" section above predates that push). Still
    no push without Nicky's explicit word.
+
+## 2026-07-07 ~11:45 PT — FK sweep: panel identification over the 740 untested stage-1 kills (partial)
+
+Session directive (Nicky, ~10:25 PT, THIS supersedes the ~05:30 pass@k-as-filter
+decision): finish the stage-1 false-kill search by **triage → blinded panels**;
+the `out/stage1_kill_census/remainder_pass_at_k/` relaunch (10:11, PID 13517,
+died at record 1/740) is INERT — do not resume without Nicky's word.
+
+All artifacts: `out/stage1_kill_census/fk_sweep/` (new files only; out/**
+append-only respected; $0 API; no Qwen launches; no commits).
+
+1. **Population 740 rebuilt by exclusion + verified** (886 census_input − 146
+   census fk/gm; 4 census-unclear kept).
+2. **Triage (all 740 tiered):** high 349 / med 154 / low 237 (+10 error-mode
+   auto-queued). Blind 10-seed gate enforced: v1 (haiku) FAILED 2/5 + hex-uid
+   corruption; v2 (haiku, recalibrated, int idx) FAILED 3/5; diagnosis — FKs
+   whose answer is a universal structural fact (blow-up alternative,
+   principal-eigenvalue positivity) have kill reasons TEXTUALLY identical to
+   genuine-miss, invisible to pattern-matching; v3 (sonnet, low-tier-only,
+   "structural-answer override" prompt) PASSED 5/5 with GM ride-alongs staying
+   low (39/276 promoted). Triage tiers are a search ordering, NOT probabilities
+   (precision unmeasured beyond n=2).
+3. **Panels (census method: 2 blind rulers + third-ruler adjudication, rubric
+   verbatim): chunk 0 only** — 12 fresh (all 10 error-mode + 2 top 2/3-splits)
+   + 3 blind census seeds. Result: **4 FK / 7 GM / 1 unclear**.
+   - **Error-mode finding: the census's ~100% FK prior for 0/0 judge-crash
+     kills is REFUTED — measured 3/10 FK [6.7, 65.3]. Stratum now fully ruled.**
+   - **Rescue queue (Nicky decides pass@k):** 623a5256 (b2), 6d1ebb71 (b4),
+     7d3b6c78 (b5) — error-mode; 02ed4c59 (b1, 2/3-split). 3 unanimous,
+     1 majority-2of3. Table in `fk_sweep/SWEEP_REPORT.md`.
+   - ⚠️ Calibration 2/3 (below the 80% gate, unremediated — budget): census-FK
+     seed 0e4eafef panel-ruled GM unanimously; ambiguous vs the census's own
+     documented FK-overcount bias. Weigh before comparing sweep/census rates.
+4. **Budget:** ~1.93M subagent tokens of the ~2M target (two failed triage
+   passes ate the panel budget; method held at census grade, coverage cut).
+   Ruled 12/740; ~182 expected FKs remain in the 728 unruled (census strata
+   rates). **Resumption is cheap and staged:** `fk_sweep/chunk_manifest.json`
+   + `chunks/chunk_01..41.jsonl` are blinded, priority-ordered (2/3-split
+   high first), ~85–100K tok per chunk-pair measured; calibration seeds sit
+   in chunk 1.
+5. Env note: chunk-0 panel workflow died once in the orchestrator (args
+   plumbing) AFTER rulers finished; resumed from journal with rulers cached —
+   no ruling work lost or re-billed.
+
+Open for Nicky: (a) pass@k the 4-FK queue? (b) adjudicate 0e4eafef calibration
+dispute? (c) continue panels (chunk 1+) on a fresh budget? (d) error-mode
+handling upstream — with ~100% FK refuted, consider re-running the 11
+census-era error kills' judge stage rather than assuming.
+
+## bulk-batcher BUILT + DISARMED (2026-07-07, build session)
+
+Automatic 250-record batching + Sonnet-only funnel queue. **Ships DISARMED —
+only Nicky arms it.** Full design: `docs/bulk_batcher_design.md` (uncommitted).
+
+- Code: `src/icepick/batcher/` (identity/ledger/backfill/journal/slicer/stages/
+  state/config/status/daemon/cli_glue) + `tests/batcher/` (311 tests incl. 11
+  acceptance covering the 7 brief scenarios). `cli.py` hook = 2 lines (69, 115).
+  Suites at ship: root 918/3 skipped, three-suite 1039 (pre-build baselines
+  607/3 and 728 intact).
+- Dedup: two layers — uid `sha256(source\x1fstatement)[:32]` pre-injected at
+  slice (funnel preserves it) under ONE campaign source `arxiv_bulk_pde625`,
+  plus source-independent normalized-statement key vs all history. Ledger
+  backfilled at `out/auto_batcher/ledger/` — 2,609 blocking + 294 warn-only
+  uids (18 sources). Byte replay→collapse+refill; same-uid-diff-content→HARD
+  ABORT (batch8's real failure class — its dup was NOT byte-identical);
+  cross-source stmt hit→skip+log (policy-flippable).
+- $0 dry-run PASSED 13/13 assertions (real CLI + real mount, stubbed paid
+  stages; keyless flow_testing smoke) → `out/auto_batcher/DRY_RUN_TRANSCRIPT.md`.
+  Go-live/arm/disarm commands: `out/auto_batcher/STATUS.md`.
+- NOT committed (awaiting Nicky's word). No pushes. $0 API spend during build.
+- Open for Nicky: campaign_source value; cross_source_statement_policy default
+  `skip`; 045533Z orphan handoff (294 uids, warn-set); cascade mid-stage kill
+  re-bills ≤~$2.30; `--once` STATUS.md held-section asymmetry (daemon mode
+  correct; events.jsonl durable).
+
+**ARMED by Nicky 2026-07-07 ~19:25Z.** Daemon live (nohup, initial PID 28279 —
+verify `pgrep -f "batcher run"`), watching the June bulk journal (166/250 at
+arm; June extraction down-resumable, its resume is hold-gated) + batch9
+watch-journal (242/244 ingested as ledger blockers, 2 already known). Code
+still UNCOMMITTED. Disarm: `icepick batcher disarm --root out/auto_batcher`.
+
+### Addendum ~12:45 PT — chunk 1 ruled after Nicky's +0.5M budget raise
+
+Chunk-1 panel (12 triage-high 2/3-splits + the other 3 calibration seeds)
+completed. Combined sweep now **24 fresh ruled: 9 FK / 13 GM / 2 unclear**
+(rate 37.5% [18.8, 59.4]).
+- **Calibration RESOLVED: 5/6 = 83%, gate MET** (all chunk-1 seeds unanimous-
+  correct; sole miss stays 0e4eafef — isolated, consistent with the census's
+  documented FK-overcount bias, not panel drift).
+- **2/3-split stratum measured: 6/14 FK = 42.9% [17.7, 71.1]** — census 50%
+  prior holds up; 57 splits still unruled (top of chunks 2–6).
+- Rescue queue now **9** (7 unanimous / 2 majority): 623a5256(b4), 6d1ebb71(b6),
+  7d3b6c78(b1) error-mode; 02ed4c59(b2), 135e51cd(b5), 21157594(r0707),
+  2a9d82be(b4), 53030d00(r0707), 561709c5(b5) 2/3-splits. NOTE: rev 1's
+  queue table had memory-written batch fields, two wrong — rev 2 of
+  SWEEP_REPORT.md is disk-derived and authoritative.
+- 4343d684 (batch7, Sonnet-ab-PASSED) ruled GM unanimously — Sonnet re-pass
+  is evidence, not truth.
+- Spend: 2.137M subagent of 2.5M raised target; STOPPED (chunks 2–41 staged).
+- Residual: ~176 expected FKs in the 716 unruled. Census+sweep FKs to date: 53.
+
+**Operator control is now single-file: `./batcherctl.sh` (repo root,
+untracked/uncommitted).** One word per action — `status` (default) / `arm` /
+`disarm` / `tail` / `clear-halt <reason>` / `help`; production paths baked in;
+every command ends with a machine-parsable `STATE {json}` line + exit code, so
+low-power operator agents can drive it. `arm` is idempotent convergence
+(standing spend approval encoded per Nicky 2026-07-07); `disarm` is graceful
+only (never signals). Lifecycle tested in scratch; production tested read-only
++ arm-noop. This supersedes the multi-flag commands in DRY_RUN_TRANSCRIPT.md.
+
+### Addendum ~13:25 PT — chunks 2–6 ruled after Nicky's second raise (+1M → 3.5M)
+
+One workflow (10 blind rulers ∥ + 5 adjudicators, 747K tok, 16 min) ruled 60
+records with zero coverage gaps. **Sweep final: 84/740 fresh ruled — 32 FK
+(26 unanimous / 6 majority) / 50 GM / 2 unclear.**
+- **High-band split strata EXHAUSTED and census priors CONFIRMED at real n:**
+  2/3 = 47.6% [32.0, 63.6] (prior 50%); 2/2 = 28.6% [11.3, 52.2] (prior 30%).
+  Error-mode stays refuted at 30% (prior ~100%).
+- Census-unclear **c6ed02fc resolved genuine_miss** (unanimous, c3 panel).
+- Rescue queue now **32** (subcats: 20 std-term-pedantry / 8 notation-conv /
+  4 judge-math-error; all 8 batches). Full disk-derived table:
+  `out/stage1_kill_census/fk_sweep/SWEEP_REPORT.md` rev 3.
+- Combined identified FKs: **76** (44 census pass@k'd, 9/44 recovered + 32
+  sweep, awaiting Nicky). Residual ~150–185 in the 656 unruled (597× 3/3).
+- Spend 2.88M/3.5M subagent; stopped at the announced tranche boundary.
+  Chunks 7–41 pre-built for continuation (~150K/chunk measured).
+
+Open for Nicky: (a) pass@k the 32-queue? (b) two 3-way-split unclears
+(58b4f8cc, 44912e4c) → human look; (c) continue into the 3/3 pool (chunks
+7+, ~22–27% yield)? (d) upstream: re-judge error-mode kills.
+
+### Addendum ~15:15 PT — 32-FK rescue pass@k LAUNCHED (Nicky release, +1M budget)
+
+Nicky: "push newly discovered fk's into pass@k testing", +1M (budget → 4.5M).
+- Input: `out/stage1_kill_census/fk_sweep/rescue_pass_at_k/rescue_input.jsonl`
+  — the 32 sweep-confirmed FKs, filtered from the validated 740-record
+  `remainder_pass_at_k/remainder_input.jsonl` join (final_corpus schema,
+  32/32 re-validated). Disjoint from the census-44 rescue by construction.
+- Launch: repo-root `gate_fksweeprescue_passk.sh` (uncommitted, mirrors
+  gate_stage1rescue convention), byte-identical wire params (qwen3-8b, k=8,
+  temp 0.7, 2048 tok, think off, concurrent 1, $0). Qwen slot verified free
+  (only live icepick proc = parallel claude:anthropic cascade PID 30710,
+  non-Qwen). Driver PID 31387, nohup-detached; log
+  `fk_sweep/rescue_pass_at_k/gate.log`; checkpointed/resumable. ETA ~55 min.
+- Readout on completion → `fk_sweep/rescue_pass_at_k/RESULT.md`:
+  band+solved = recoverable floor (census-44 baseline: 9/44 = 20.5%);
+  non-recoverable ≠ FK refuted. NOT folded into corpus without Nicky's word.
+
+### Addendum ~16:15 PT — 32-FK rescue pass@k COMPLETE: 12/32 recoverable (37.5%)
+
+Clean run (32/32, interrupted:false, 192 calls, $0, 57 min, driver exited 0).
+**Recoverable band+solved = 12/32 = 37.5%** vs census-44's 20.5% — the
+split-rich sweep queue recovers ~2× better. 5 solved / 7 band / 1
+misdirection / 11 collapse / 8 drop. judge-math-error again 3/4 = 75%
+(same signature as census-44). Full readout + the 12-record table:
+`out/stage1_kill_census/fk_sweep/rescue_pass_at_k/RESULT.md`.
+- Flag: 623a5256 (error-mode, majority-2of3) collapsed 0/8 with modal-wrong
+  λ^m matching the dissenting ruler's alternative — weakest FK of the 32.
+- **NOT folded** (protocol). If Nicky says "fold the band" (census
+  precedent): 7 band records → band corpus, all 32 →
+  wellposed_all_with_passk tagged source_batch=fksweeprescue_20260707,
+  5 solved held in wellposed_all only.
+
+### Addendum ~16:55 PT — band FOLDED (Nicky "fold the band"); sweep continuation running
+
+- k12 recheck (2 boundary rows, fk33 convention): both stayed band
+  (c99673ac 4/12, 3f902f30 8/12). **7 band folded: corpus_pde625 now
+  849 WP / 136 band** (from 817/129), tag fksweeprescue_20260707, backups
+  .bak-pre-fksweeprescuefold, three files + manifest cross-agree at 136,
+  0 collisions. 5 solved held in wellposed_all only. Manifest carries the
+  fksweeprescue assembled_from entry + k12_rechecks line.
+- **Nicky continuation directives (this session): "continue sweep", +1M
+  (→5.5M), "automatic band folding allowed"** — panels chunks 7–19 (156
+  triage-high 3/3s) IN FLIGHT (workflow wq064pnom); loop for new FKs:
+  gated pass@k → auto-fold band (census convention w/ k12 boundary checks).
+
+### Addendum ~17:20 PT — chunks 7–19 ruled (+45 FKs); rescue2 queued behind batch 9
+
+- Panels c7–19 (156 triage-high 3/3s): one workflow, 26 rulers ∥ + 11
+  adjudicators, 1.80M tok, 30 min, no gaps/pending. **+45 FKs.**
+- **Sweep totals: 240/740 ruled — 77 FK (65 unanimous) / 161 GM / 2 unclear.**
+  Triage-high 3/3 stratum measured **28.7% [22.0, 36.2]** (vs 21.7% census
+  all-3/3 prior — triage concentration confirmed). Unruled 500 (110 high-3/3,
+  154 med incl. all 59 remaining splits, 236 low), ~149 expected FKs.
+- **Identified FKs to date: 121** (44 census + 77 sweep).
+- Rescue loop (standing auto-authorization): 45 new FKs →
+  `fk_sweep/rescue2_pass_at_k/` (input validated 45/45). **Queued behind
+  batch 9's live pass@k (PID 48659, parallel session)** via
+  `gate_fksweeprescue2_passk.sh` (gate PID 50014, armed 00:04Z, nohup'd —
+  survives sessions). On completion: k12 recheck for n=6/8 boundary rows →
+  auto-fold band, tag fksweeprescue2_20260707. If no session is alive then,
+  the fold steps are in fk_sweep/RESUME_STATE.md.
+- Budget: 4.68M/5.5M subagent (stop-line 4.95M); panels stop here — the
+  remaining ~270K is reserved for rescue2 fold orchestration + reporting.
+
+### Addendum ~17:45 PT — FINAL sweep (opus rulers) PREPARED, not launched
+
+Nicky: "prepare codebase for final sweep to be done by opus instead of fable."
+Everything a cold session needs is under `out/stage1_kill_census/fk_sweep/`:
+- `chunks_final/chunk_20..61.jsonl` — all 500 unruled records blinded
+  (20–41 mirror the original priority order: 110 high-3/3 + 154 med incl.
+  all 59 remaining splits; 42–61 = the 236 triage-low); chunks 20/21 carry
+  6 fresh blind OPUS-calibration seeds (never used in triage/fable panels).
+- `tools/` — opus_panel_workflow.template.js (every agent call pins
+  model:'opus'), emit_chunks_const.py, assemble_final.py (stamps
+  ruler_model, model-partitioned aggregates, gate check), fk_lib.py.
+- `FINAL_SWEEP_RUNBOOK.md` — tranche plan (A 20–27 w/ calibration gate ≥5/6
+  FIRST, B 28–34, C 35–41, D low 42–61; ~6M tok total, ~80–95 expected FKs),
+  full per-tranche procedure incl. rescue pass@k + k12 + auto-fold chain.
+- Model partition documented: chunks 0–19 = fable-5 rulers, 20+ = opus
+  (census-comparable again); never pool rates across ruler models unlabeled.
+All prep verified end-to-end (emitter, seed blinding schema-uniformity,
+fk_lib self-test, tools parse). NOT launched — tranche releases + budget are
+Nicky's. Rescue2 (45 FKs) still queued behind batch-9 pass@k (gate PID 50014).
+
+### Addendum ~19:30 PT — OPUS tranche A′ (chunks 20–23) ruled; GATE 6/6; rescue3 armed
+
+Nicky "continue 0.75Mtok": opus tranche via the prepared template/tooling.
+- **OPUS CALIBRATION GATE: 6/6 PERFECT** (5 unanimous + 1 majority; incl.
+  8ff31b4a, the census+human+Qwen triple-corroborated seed). Opus panels are
+  census-comparable; later opus tranches trusted. Fable↔opus partition is
+  stamped per-row (ruler_model) and aggregates.json is model-partitioned.
+- Tranche: 54/54 (48 real + 6 seeds), 462K tok (≈8.5K/rec — cheaper than
+  fable's ~11.5K), 7 adjudications, 7 min. **+11 FKs (all 3/3, mostly
+  std-term-pedantry; opus high-3/3 rate 22.9% vs fable's 28.7% — model
+  or queue-depth effect, kept separate in aggregates).**
+- **Sweep: 288/740 ruled — 88 FK / 198 GM / 2 unclear. Identified FKs: 132**
+  (44 census + 88 sweep). Corpus unchanged pending rescues (849/136).
+- Rescue queue now three deep on the single Qwen slot: batch-9 pass@k
+  (running, parallel session) → rescue2 (45 FKs, gate PID 50014) →
+  **rescue3 (11 opus FKs, gate PID 62810, `gate_fksweeprescue3_passk.sh`)
+  — SERIALIZED on rescue2's 45/45 completion + slot-free (fixes the
+  double-fire race two slot-only polling gates would have)**.
+- Budget: ~5.15M subagent of 6.25M raised. Remaining final-sweep chunks:
+  24–41 (high-3/3 tail + med) + 42–61 (low) per FINAL_SWEEP_RUNBOOK.md.
+
+### Addendum ~20:15 PT — tranche B1 (+19 FKs); GATE-DEADLOCK found & fixed; rescue chain LIVE
+
+- Opus tranche B1 (chunks 24–27, 48 recs, 384K tok): **+19 FKs (39.6% —
+  FK-dense pocket)**. Sweep: **336/740 ruled, 107 FK; 151 identified total.**
+  rescue4 (19) staged + gated behind rescue3.
+- **⚠ OPS BUG (fixed, remember for all future gates): a long-running shell
+  whose COMMAND LINE contains the literal text "icepick processing pass_at_k"
+  (e.g. an inline watcher embedding that pgrep pattern) makes every
+  slot-gate's `pgrep -f` match it forever → the whole rescue chain
+  deadlocks silently.** This bit us ~03:13Z: batch-9's pass@k had FINISHED
+  (79 records on disk) but rescue2's gate saw the watcher shell as a
+  phantom slot-holder. Fix: killed the watcher → rescue2 fired 03:14:45Z
+  (PID 65344). RULE: never embed the gate pattern verbatim in long-running
+  command lines; in watchers use the bracket trick (`pass_at_[k]`) or
+  file-based conditions only.
+- Rescue chain now self-cascading on the Qwen slot: rescue2 45 (RUNNING,
+  ~75 min) → rescue3 11 → rescue4 19 (serialized gates). On full-chain
+  completion: k12 boundary rechecks + auto-folds (tags
+  fksweeprescue2/3/4_20260707) per standing authorization.
+- Budget ~5.54M/6.75M. Panels remaining: chunks 28–41 + low 42–61.
+
+### Addendum ~20:45 PT — fold protocol simplified (Nicky)
+"k12 recheck unnecessary. Fold in all 0.125–0.75." → band rows (n_correct
+1–6 at k=8, 0.75 boundary INCLUDED) fold directly; no k12 runs, ever, going
+forward. Applies to the in-flight rescue2/3/4 folds. Panels HELD (Nicky
+interrupted the chunks-28+ launch); rescue chain unaffected, still cascading.
+
+### Addendum ~22:10 PT — rescue chain COMPLETE + all three FOLDED (no-k12 protocol)
+
+Chain ran clean & serialized after the deadlock fix: rescue2 45/45 (04:19Z) →
+rescue3 11/11 (04:34Z) → rescue4 19/19 (05:03Z), all exited 0, $0.
+Recoverable: r2 13/45 (8 solved/5 band), r3 2/11 (0/2), r4 6/19 (4/2) —
+**chain total 21/75 = 28%; all sweep rescues 33/107 = 30.8%.**
+Folds (tags fksweeprescue2/3/4_20260707, backups, guards, cross-agree):
++9 band, +75 wellposed_all. NOTE: a parallel session folded batch 9
+(+79 WP/+11 band) before our folds — pre-fold books verified consistent at
+928/147. **Corpus NOW: 1003 WP / 156 band.**
+Sweep FK ledger: 151 identified (44 census + 107 sweep); panel coverage
+336/740; panels HELD at Nicky's interrupt (chunks 28–41 + 42–61 staged).
+
+### Addendum ~22:55 PT — tranche B2 (chunks 28-32): +18 FKs; med-splits swept
+
+Opus B2 (60 recs: last high-3/3 + ALL med-tier splits, 528K tok): **+18 FKs.**
+Sweep: **396/740 ruled — 125 FK / 267 GM / 4 unclear; 169 identified total**
+(44 census + 125 sweep). Split strata now ~complete: 2/3 = 28/70 = 40.0%
+[28.5,52.4], 2/2 = 11/38 = 28.9% [15.4,45.9] — both near census priors.
+Unruled: 344 (330 3/3, 13 2/2, 1 2/3) — the last high-yield stratum is
+gone; remainder is 3/3 + a few splits at ~20-27%.
+rescue5 (18 FKs) staged + gated behind the parallel auto-batcher June pass@k
+(gate PID 80360, `gate_fksweeprescue5_passk.sh`, waits on slot). On
+completion: auto-fold no-k12 (tag fksweeprescue5_20260707) via
+tools/fold_rescue.py. Watcher b0xkzfw42 (file-based, deadlock-safe).
+Corpus 1003/156 (disk-verified). Budget this session's panels ~6.6M cumulative.
+
+### Addendum 2026-07-08 ~02:55 PT — rescue5 COMPLETE + FOLDED
+
+rescue5 (18 B2/med-split FKs) ran 09:52Z after the auto-batcher freed the slot:
+3 solved / 2 band / 4 collapse / 9 drop → 5/18 = 27.8% recoverable. Folded
+no-k12 (fksweeprescue5_20260708): +2 band, +18 WP. **Corpus NOW: 1021 WP /
+158 band.** All 125 sweep FKs now pass@k'd + folded (rescue+2+3+4+5). Sweep
+FK-rescue grand total: 38/125 = 30.4% recoverable. Panel coverage 396/740;
+unruled 344 (330 3/3 + 14 dregs); panels idle pending Nicky release.
+
+### Addendum 2026-07-10 - well-posed band miss-audit skeleton
+
+Docs-only prep for a future fresh-context audit of band-corpus false positives:
+`docs/wellposed_band_miss_audit_skeleton.md` now contains a paste-ready
+orchestrator prompt for Claude Fable 5 plus high-level agent review rubric,
+JSONL output schema, and stop conditions. Disk check at prep time:
+`out/corpus_pde625/band_corpus.jsonl` = 309 rows,
+`corpus_manifest.json` `total_band_records` = 309, and
+`wellposed_all_with_passk.json` = 1998 rows. No audit was launched; no live,
+paid, Qwen, scrape, pass@k, fold, or corpus mutation work was done.
+
+### Addendum 2026-07-10 ~20:50Z — wellposed band miss-audit EXECUTED (findings only; corpus untouched)
+
+Fresh-window audit per `docs/wellposed_band_miss_audit_skeleton.md` over `band_corpus.jsonl` @ 309 rows
+(sha-stamped snapshot + 16 shards under `out/audits/wellposed_band_miss_audit_20260710T010302Z/`).
+Method: 16 Fable shard-review agents (skeleton rubric, structured JSONL) → blind independent second pass
+over all 47 flagged + all 27 rescue-path rows (70-row pool; 20 rows incidentally got a THIRD review via a
+resume-cache quirk — run-1 reviews preserved). Orchestrator adjudicated 11 splits (rationales in
+`raw/orchestrator_state.json`). Run stalled at the session usage limit Jul 9 evening after the first pass;
+resumed Jul 10 on Nicky's "Continue, 1Mtok" (workflow wf_af4cbfc4-6f1, ~1.53M subagent tokens total).
+
+**RESULTS: 43/309 miss candidates (13.9%)** — Tier 1 unanimous 34 / Tier 2 majority-2of3 5 / Tier 3
+adjudicated 4; **2 needs_human** (`e5ed37d5…` Benjamin-Ono normalization, votes nh/K/K; `a7b98a81…`
+DW-scheme unit-vector fact, votes nh/nh/M); 264 keeps. Types: missing_context 18, answer_not_determined 11,
+extraction_mismatch 6, multiple_answers 4, ill_typed 2, convention_dependent 2. Dominant pattern: QA
+extraction drops load-bearing context (elided equations "a system"/"an ODE", uncarried hypotheses,
+gained/lost sharpness qualifiers) — an extraction-time placeholder guard would have caught 15+.
+Lane rates: Sonnet-only lanes 25/147 (17.0%) vs 2stage+advisory 11/97 (11.3%). **Rescue lanes vindicated:
+24/27 keep, 2 miss (76ac6e… unanimous; f5416819… majority — its original stage-1 kill was arguably right),
+1 needs_human → 7.4% vs 13.9% corpus-wide.**
+
+Deliverables: `audit_report.md` (tiered uid lists for action), `miss_candidates.jsonl` (full evidence),
+`needs_human.jsonl`, `agent_reviews/`. Input anomaly noted: `wellposed_band.json` batch3 entries have
+uid/via/tier=null (canonical JSONL intact). NO corpus mutation; no scrapes/judges/pass@k/Qwen/paid calls.
+Removal decisions are Nicky's; if folded out, corpus_manifest per-batch band counts + wellposed_all need a
+coordinated update.
+
+### Addendum 2026-07-10 ~21:30Z — judge-comparison + funnel-analysis prep docs (docs only)
+
+Follow-on prep for the miss audit, per Nicky. Three-window chain: THIS session wrote
+(1) `docs/wellposed_miss_audit_summary_20260710.md` — why the 43 were flagged (7 mechanism
+clusters, per-row table, lane rates, control-sampling guidance) — and
+(2) `docs/judge_comparison_funnel_skeleton.md` — paste-ready skeleton for a fresh window that
+compares the audit vs another judge (disk-first: advisory flags / claude:anthropic fleet
+verdicts / panel rulings; live gpt-5.5 run only on release, ≈$5.4 > HITL) and analyzes the
+codex:anthropic funnel structure (hypotheses H1-H5, candidate adjustments S1-S6). That window
+makes NO code changes; its deliverable is `docs/funnel_adjustment_execution_skeleton.md` for a
+THIRD window to execute. No launches, no corpus mutation, docs only.
+
+### Addendum 2026-07-10 ~22:45Z — skeleton unification + cross-audit adjudication (window closed)
+
+Nicky had TWO competing window-2 skeletons (this ledger's 21:30Z entry vs the panel session's
+`out/corpus_audit/handoff/SKELETON_judge_comparison_and_funnel_analysis.md`); he tasked a fresh
+session to integrate them and adjudicate the two audits' divergent results (43/309 vs 47/282,
+flag-set Jaccard 0.448, κ=0.548). A 15-agent blind-first math-checked panel resolved all 12
+disputed rows (band-miss right 9, panel right 3 — the 3 de-flags `3ede4dd9` `d682389a` `5cab6922`
+are now false-kill sentinels) and confirmed 6/6 sampled panel-only flags incl. `e5ed37d5`
+(ex-needs_human, answer-flipping BO-convention fork, computed). Post-adjudication label set —
+41 evidence-confirmed ill / 12 presumptive / 8 circular-degenerate POLICY rows / 3 resolved-well /
+1 needs_human (`a7b98a81`) — lives in `out/audits/skeleton_unification_20260710T214021Z/`
+(adjudicated_labels.jsonl, panel_results.jsonl, COMPARISON_AND_POSITION.md, cross_tabulation.json).
+Key empirical shift for the funnel work: in 18/18 adjudications derivation depth, not
+source_statement access, separated right from wrong verdicts (H2 recoverability-vs-derivability
+confirmed as the central failure; "re-derive, don't recall" is the top rubric candidate).
+**Both prior window-2 skeletons are SUPERSEDED (not edited) by
+`docs/judge_comparison_funnel_skeleton_v2_unified.md`** — paste that one. Its window consumes the
+label set, closes the 7-row residue, benchmarks other judges disk-first, runs the funnel analysis,
+and emits `docs/funnel_adjustment_execution_skeleton.md` for window 3. Awaiting Nicky: E1/E2
+removal ruling, the circularity policy call, `a7b98a81`, optional releases (12 pending splits /
+live judge runs). $0 API, 0 Qwen, corpus untouched (309, sha 01609862… re-verified), no commits.
+
+### Addendum 2026-07-11 ~03:05Z — window-2 verified & consolidated; ONE window-3 skeleton (unification session, cont.)
+
+Nicky's "Continue" launched this session on the unified window-2 mission — mid-flight we
+discovered it had ALREADY been run twice in parallel: a "racer" (B-contract deliverables in
+out/funnel_adjustment_analysis/, ~21:31–22:01Z) and "window-2b" (session b213a893, third-ruled
+racer-vs-unification disagreements → v3 labels + amended S-ranking, closed ~23:05Z). This session
+then independently VERIFIED 2b with 10 fresh agents (launched blind to 2b's existence): §2
+structural facts fully confirmed at line level (+3 additions: codex_adapter judge_model/judge.model
+attribution bug → poser_model='' everywhere; temperature-0.2 corroboration collapse; judge cache
+is per-run-dir so rubric edits re-bill only in-place re-judging); §3 vote receipts confirmed on
+all 41 E1 rows (visibility census 26 not-seen / 12 seen-excused / 3 unclear; judge confabulates
+missing context — 878e7f40 invents a damped wave equation; ef97f733 = live parse-bias pass);
+residue rulings double-confirmed on 5/7, RE-CONTESTED on 2 (11e30827 — source companion exponent
+1/19 proves formulation-sensitivity; 343249ba — deleted-definition extraction); eb113602 overturn
+RATIFIED (full uniqueness proof reconstructed blind, twice independently); 570fcab3 = rubric
+semantics fork → Nicky. **Final v3.1 labels: 41 E1 / 5 E2 / 8 policy / 7+1 sentinels / 2 contested
+/ 1 nh** (309→268/263/255) in out/audits/skeleton_unification_20260710T214021Z/labels_v3_1.jsonl
+(+ V3_VERIFICATION_FINAL.md = the one consolidated Nicky queue). **Window-3: paste
+docs/funnel_adjustment_execution_skeleton.md** — consolidates racer scaffold + 2b amendments +
+v3.1 (S2 rubric-v2 attempt-the-derivation + carve-outs, S1 advisory lint; optional S7/S0/B1 arm
+checkboxes; sentinel-0-kills hard gate; validation ≈$0.7–1.2 hold-gated). The racer skeleton +
+2b-§5-amendments combo is superseded by that single file. $0 API / 0 Qwen / corpus untouched
+(sha 01609862… re-verified) / no commits. Three-pass lesson logged: unannounced parallel sessions
+on one mission → provenance-stamp every artifact row; declare-then-write ordering caught twice.
+
+### Addendum 2026-07-11 ~06:10Z — three-lane reconciliation + governance skeleton (unification session)
+
+Nicky asked this session for a "process correction skeleton" while window-2b was independently
+splitting out its rescue + window-3-wrapper lanes — producing the evening's fourth mission-name
+collision (receipt I11). Reconciled: (1) 2b's wrapper deltas D1–D3 (fold-resilient validation,
+repaired-row pilot, shared-checkout etiquette) are FOLDED INTO docs/funnel_adjustment_execution_
+skeleton.md — pasting wrapper or docs skeleton is now equivalent; (2) this session's governance
+skeleton RENAMED to docs/process_discipline_skeleton.md (repo-level corrections: mission registry
+in this ledger, mandatory provenance stamps, docs/LABEL_AUTHORITY.md pointer, write-then-declare
+checkpoints, late-writer discipline, adjudication standards, budget ledger — 11 incident receipts
+inside); (3) rescue lane untouched (it correctly consumes labels_v3_1). THREE paste-ready lanes
+now: rescue (out/funnel_adjustment_analysis/SKELETON_rescue_repair_lane.md), window-3
+(docs/funnel_adjustment_execution_skeleton.md), governance (docs/process_discipline_skeleton.md).
+All independent; Nicky arms checkboxes at paste time. $0, no corpus/code changes, no commits.
+
+### Mission claim 20260711T060641Z — funnel-adjustment-execution-w3 (ACTIVE)
+
+| slug | session | started (UTC) | scope | budget |
+|---|---|---|---|---|
+| funnel-adjustment-execution-w3 | 89fe6f6f (Fable-5) | 20260711T060641Z | execute docs/funnel_adjustment_execution_skeleton.md: S1+S2 core only; S7/S0/B1 UNARMED; sentinel gate = 7 ratified (570fcab3 excluded, unratified); live S2 validation ~$0.7-1.2 treated as released by Nicky's in-session "execute" | unlimited to 06:29Z, then 1.5Mtok |
+
+Writes this window: src/posers/Codex_Poser well_posedness {scoring.py, cli.py, tests} + out/funnel_adjustment_analysis/execution_validation_20260711T060641Z/ + this ledger. Corpus sha 01609862.../309 verified at claim time. Rescue lane detected LIVE in parallel (out/qa_repair_20260711T055242Z, no HANDSHAKE_window3.md yet) — D3 etiquette in force, its dirs untouched, no Qwen use here. Heartbeat at each phase boundary; CLOSED line at session end.
+
+### Addendum 2026-07-11T07:34Z — window-3 EXECUTED: rubric v2 FAILS validation (funnel-adjustment-execution-w3 CLOSED)
+
+Executed docs/funnel_adjustment_execution_skeleton.md (S1+S2 core; S7/S0/B1 unarmed; 7 ratified
+sentinels). Code landed UNCOMMITTED, defaults byte-identical (v1 prompt sha-pinned): rubric-v2 +
+advisory lint + --judge-max-tokens in codex-poser well_posedness {scoring,cli,tests}; three-suite
+1064/0. Frozen population 98 (41 E1 / 5 E2 / 7 sentinels / 45 stratified controls; 12
+panel-pending splits excluded; corpus sha 01609862 unchanged throughout). RESULTS — **sentinel
+hard gate FAIL 4/7** (01464d48, 549b8fc7, d682389a, eb113602; every kill = "field-standard
+machinery undefined"; the carve-out did not protect at temp 0.2); E1 recall 37.5% conservative
+(15/40; 50.0% resolved-only) vs >=55% target and 40% floor; controls 2/45 at-limit; S1 static
+FAIL 17/244 keeps (defines_then_asks = noise). INCIDENT: v2 "attempt the derivation" x judge
+max_tokens 512 -> 40/98 truncation-ERRORs + poisoned judge cache; --judge-max-tokens added
+(default 512, no cache-key impact); retry at 1500 resolved 8/40 (all pass); 32 unresolved —
+completion exceeds the $5 line, stopped per inv 12. Spend $3.77 actual. VERDICT: package NOT
+accepted; v3 needs an executable derivability standard (bounded sketch or two-stage
+escalate-to-agent) + JSON-first replies + don't-cache-unparseable. Full analysis:
+out/funnel_adjustment_analysis/execution_validation_20260711T060641Z/VALIDATION_REPORT.md.
+Rescue lane never wrote HANDSHAKE_window3.md -> D2 pilot skipped-and-said-so. Mission claim
+funnel-adjustment-execution-w3: **CLOSED**.
+
+### Correction 2026-07-11T07:36Z (window-3): rescue handshake DID land at ~00:02 PDT — minutes after window-3's final pre-close check. D2 pilot (24 repaired rows, 72 samples) is READY but HELD: worst-case $1.81 > $1.23 remaining under the $5 line. Command + terms staged in execution_validation_20260711T060641Z/VALIDATION_REPORT.md item 6; bundle with the 32-row completion release. Grading-notes in qa_repair RESULT.md flagged as relevant to rubric-v3 design.
+
+### Addendum (window-3 follow-up): rubric v3 DRAFTED on Nicky's "draft v3" — bounded-sketch direction; text + per-change measurement trace + wiring/validation plan in out/funnel_adjustment_analysis/execution_validation_20260711T060641Z/RUBRIC_V3_DRAFT.md. Not wired, not validated, defaults untouched; wiring + ~$1.5-2.5 validation on his release after text review.
+
+### Addendum (window-3 reopened, v3 wired+validated on Nicky's release): **v3 PASSES the sentinel hard gate 0/7 but recall collapses 17.5%** (7/40; v2 was 37.5% w/ 4/7 kills); controls 3/45 (fail-by-one); truncation class ELIMINATED (2/98 residual). v3's catches = strict subset of v2's — keeps nameable-OMISSION defects, loses WRONGNESS defects (canonical-recall 0dd7247b, distortion 8d254fa0, convention 516b7d3f). Measured conclusion: single-prompt JSON judges sit on a kill-rate/catch-rate Pareto frontier whose both endpoints are now measured below acceptance — recommend two-stage (v3 gate + agent-scale escalation of ic>=2/low-conf band ~10-20%), NOT a v4 text iteration. v3 also resolved 29/32 of v2's unresolved rows (pass-leaning, as projected). Code: _PROMPT_V3 wired behind --judge-rubric-version v3 (default v1 untouched), suite 1066/0. Spend: v3 run $1.55 (released); window API total $5.32. Full analysis: execution_validation_20260711T060641Z/V3_VALIDATION_ADDENDUM.md. Everything uncommitted.
+
+### Addendum (window-3): code COMMITTED on Nicky's release — 7a3546c "wellposed: opt-in judge rubrics v2/v3, advisory context lint, --judge-max-tokens" (3 poser files, 609 insertions, all default-off, v1 sha-pinned; suite 1066/0 pre+post). NOT pushed (main ahead 6). SESSION_HANDOFF + batcher cli.py left uncommitted (parallel-session content). Validation evidence stays in out/ (untracked by design).
+
+### Addendum (window-3): Nicky DECIDED — arm v3 + build the two-stage trustworthy funnel. Paste-ready execution skeleton written: **docs/trustworthy_funnel_execution_skeleton.md** (mission slug trustworthy-funnel-execution). Core armed by his message: H1 parse-bias strict policy, H2 B1-attribution fix, H3 don't-cache-unparseable, H4 IC-to-queue, A1 arm v3 (v3 + max-tokens 1500 + strict, on the NEW-batch launch surface only — codex-poser default stays v1, existing gate scripts untouched), B2 stage-B blind-derivation escalation (stage-A flag no longer drops records alone — invariant-8 alignment). Optional checkboxes: S7, live shadow batch, standing report column. Acceptance: sentinels 0/7 through both stages HARD, combined recall >=55/40, net control kills <=2/45, stage-B must rescue >=2 of the 3 known control FPs. NOTE: v3 is NOT live until that window passes its gates. Builds on commit 7a3546c.
+
+### Mission claim 20260711T185543Z — extractor-hardening (ACTIVE, session 89fe6f6f)
+
+| slug | session | started (UTC) | scope | budget |
+|---|---|---|---|---|
+| extractor-hardening | 89fe6f6f (Fable-5) | 20260711T185543Z | Nicky: "push the extractor fix immediately" — build extraction-time guards: (1) source-vs-statement diff guard (dropped clauses / added superlatives / substitutions — R1+distortion classes), (2) elided-source filter (unresolved refs feeding load-bearing content — R2 class); backtest vs the 41 known-bad (source_statement + repair diffs = ground truth) + FP rate on 279-corpus source pairs; extraction path only (realmath.py QA + bulk lane if shared), NO poser/src changes, no commits until release | remainder of 1.5M window (~700k) |
+
+### Addendum (extractor-hardening CLOSED): the extractor fix is BUILT, uncommitted, ready on Nicky's word.
+Root causes confirmed at code level: _clean_tex strips \ref-family destructively (creates the R2 grammatical holes) AND qa_extractor discarded the miner's has_external_refs flag (set since initial commit, consumed by nothing — all 320 audited rows flag=False). Landed (suite 1100/0, baseline 1066): E1 flag+raw-source propagation (source_statement_raw now stored — future audits get pre-strip truth); E5 reference RESOLUTION at mining (label→env index from full tex; resolved content fed to the QA generator so it poses self-contained problems; unresolvable refs keep the flag); E2 qa_ref_guard {off,advisory,strict} default advisory at normalise() (strict quarantines "[quality-guard]", both lanes, resume-safe) + guard_flagged counter in reports; E4 elision-bigram advisory signals. Classifier approaches REJECTED on receipts (out/extractor_hardening_20260711T185640Z/): lexical 41-44% catch @ 26-34% keep-FP; Sonnet diff-model $0.63 backtest 49% @ 32% keep-FP + 5/8 sentinels — content-diff ≠ load-bearingness (that judgment is the posedness problem, handled funnel-side). CAVEATS: (1) clean-row QA cache keys changed ("Theorem:\n"-wrapped) — resuming a PRE-change in-flight run re-bills its QA calls once (~$0.005/call; June dead-resumable run affected); (2) retro catch-rate unmeasurable (raw bodies weren't stored pre-fix) — first live batch reports guard_flagged + resolution rates as the real measurement; (3) no CLI surface for qa_ref_guard yet (plain param, default advisory). Session API total $5.95.
+
+### LIVE RUN (guard-analysis batch, Nicky-released 2026-07-11 ~20:26Z): run 20260711T202559Z, PID 81111 — 250-paper math.AP 2026-01 qa scrape, source pde_guard_analysis_250, budget cap 42,060 calls (realized QA expected $1.5–4), FIRST RUN ON THE HARDENED EXTRACTOR (ref-resolution + qa_ref_guard advisory + guard_flagged counter). EXTRACTION-ONLY: held at handoff — no cascade, no pass@k, NO FOLD without Nicky. Analysis recipe when done: reports/source_report.md (guard_flagged + Drops), raw/quarantined.jsonl, per-record metadata.quality_guard + resolved/unresolved_refs rates in handoff/records.jsonl; compare elision-signal rate vs the retro corpus. Resume if orphaned: re-run `ANTHROPIC_KEY_FILE=/Users/redhairing/Desktop/helloworld/anthro_key.env /opt/anaconda3/bin/icepick allocation run --manifest out/intake/runs/20260711T202559Z/manifest.json` (checkpoint-native).
+
+### LAUNCH-WINDOW CLAIM (paired guard analysis, ~22:52Z 07-11): baseline run 20260711T202559Z (PID 81111, STALE pre-hardening imports — parallel stash window suspected) finishes shortly; gate_guard_analysis_paired.sh then launches the GUARDED arm (run 20260711T225119Z, approved cap 42060) behind an ARMING TRIPWIRE (loaded-module check + first-candidate field verification, kills on failure) per Nicky "Do not launch without arming corrected code". **PARALLEL SESSIONS: do NOT stash/checkout/revert src/icepick/allocation/** between now and the guarded arm's completion** — the tripwire will abort the launch and the analysis slips. Extraction-only, held at handoff, no fold. Analysis = paired per-paper comparison baseline-vs-guarded.
+
+### REFIRE (Nicky "stop it then refire on the hardened QA flow", ~23:50Z 07-11): baseline 20260711T202559Z KILLED (stale imports, PID 81111; STOPPED_NOTE in its _progress; 199 papers/620 records/5063 QA calls kept for offline elision baseline). Stale gate 38835 killed. **HARDENED REFIRE LIVE: run 20260711T234953Z, PID 64692, --max-papers 250 cap, qa_ref_guard advisory** — ARMING VERIFIED (gate_guard_hardened_refire.sh: module-source pre-check + first-candidate source_statement_raw check both PASSED; gate.log). Extraction-only, held at handoff, no cascade/pass@k/fold. Monitor wakes session on exit for guard analysis (guard_flagged, resolved/unresolved_refs rates, elision incidence vs stopped baseline + retro corpus, QA cost actuals). Resume if orphaned: ANTHROPIC_KEY_FILE=.../anthro_key.env icepick allocation run --manifest out/intake/runs/20260711T234953Z/manifest.json (checkpoint-native). PARALLEL SESSIONS: do not stash src/icepick/allocation/** while PID 64692 lives.
+
+### SALVAGE CASCADE (Nicky "kill defective records, send rest through cascade" → "just run all of it", ~00:12Z 07-12): stale baseline 20260711T202559Z (643 rec) → filtered 26 ref-hole-defective (elision/raw-ref, $0) → 617 kept in out/baseline_salvage_20260712T001221Z/{cascade_input,killed_defective}.jsonl (all provenance:extracted). LIVE v1 cascade PID 74666 (--stages codex:anthropic, production rubric v1, est $6-8 RELEASED). HELD: cascade only, NO pass@k, NO fold. CAVEAT recorded: v1 = the gate measured 0/41 on subtle R1/distortion defects; elision only removed R2 ref-holes → output is a coarse structural split, re-gate through two-stage when built before any fold. Concurrent w/ hardened refire PID 64692 (both hit Anthropic API — possible 429 retries, both have backoff). Monitor wakes session at cascade exit (final_corpus count + cost from cascade_manifest.json). Resume if orphaned: same cmd, judge-cached.
+
+### SALVAGE CASCADE DONE (~01:47Z 07-12): 617 → v1 codex:anthropic → **325 unique well-posed / 276 ill-posed (45%) / 7 error**, $5.58 actual (952k in / 182k out). final_corpus.jsonl = 332 rows but 325 UNIQUE (7 dup content-uids — dedup before any fold). NO error leak (7 error uids verified absent from final_corpus — F2 not triggered here). Results in out/baseline_salvage_20260712T001221Z/cascade/. HELD — no pass@k, no fold. TWO CAVEATS binding any downstream use: (1) 45% ill-flag by the LENIENT v1 gate ⇒ stale-extractor output is low quality; true ill-rate higher since v1 caught 0/41 subtle defects in the retro audit — the 325 "well-posed" still contain untested R1/distortion defects; re-gate through two-stage before trusting. (2) dedup the 7. Concurrent refire scrape PID 64692 still live (~219/250 papers).
+
+### HARDENED REFIRE DONE (~02:03Z 07-12) — extractor fix VALIDATED live. Run 20260711T234953Z: 250 papers (cap hit) → 295 handoff records, arming-verified hardened code. PAIRED RESULT vs stale baseline:
+| metric | stale baseline (20260711T202559Z) | hardened refire |
+|---|---|---|
+| source_statement_raw stored | 0/643 (0%) | 295/295 (100%) — audit trail restored |
+| ref-carrying theorems | flag was dropped (unmeasurable) | 162/295 (55%) |
+| references RESOLVED (fed to QA) | 0% (destructive strip) | 150/162 = 93% (348 refs pulled in) |
+| holes in POSED problems (elision) | ~4% (26/643) | **0/295 (0%)** |
+| unresolved-ref flagged (advisory) | 0 (no guard) | 35 (12%) — strict would quarantine |
+Mechanism confirmed: source_statement still shows 6.4% holes (cleaned text) but resolver fills them pre-posing → POSED output 0% holes. WIN IS SCOPED TO R2 (references); R1 dropped-hypothesis + distortion defects untouched (funnel's job). Extractor fix (uncommitted) now has live validation → commit-ready. handoff at out/intake/runs/20260711T234953Z/handoff/. HELD at handoff — no cascade/pass@k/fold. Nothing in flight now (baseline killed, refire done, salvage cascade done).
+
+### COMMIT + HARDENED CASCADE (Nicky "commit and cascade", ~04:14Z 07-12): extractor fix COMMITTED 8eefdbb "extractor: resolve LaTeX refs instead of destructively stripping them" (7 files, 615 ins, surgical — parallel-session files untouched; suite 1104; NOT pushed, main now ahead 7). Then LIVE cascade on the 295 HARDENED handoff records (run 20260711T234953Z) → out/hardened_cascade_20260712T041410Z/ PID 19612, v1 codex:anthropic, est ~$2.65 (<$5 autonomous). HELD — no pass@k/fold. This is the PAIRED counterpart to baseline_salvage (stale=45% ill); compares ill-rate of resolved-ref extraction vs stale. Monitor wakes at exit. Nothing else in flight.
+
+### ANOTHER HARDENED EXTRACTION (Nicky "begin another hardened extraction", ~04:50Z 07-12): run 20260712T044950Z PID 20185, math.AP **2026-02** (fresh window, no Jan overlap), --max-papers 250, qa_ref_guard advisory, ARMING-VERIFIED (module pre-check + first-candidate source_statement_raw). Extraction-only, held at handoff, no cascade/pass@k/fold. Concurrent w/ hardened cascade PID 19612 (both hit Anthropic API — soft contention, both retry). Est QA ~$4-8 (last comparable 250-cap run's volume; call_budget cap 42060 = hard backstop). Monitor wakes session at exit for guard/cure-rate readout (compare to Jan: 93% cure, 0% posed holes). Resume if orphaned: ANTHROPIC_KEY_FILE=.../anthro_key.env icepick allocation run --manifest out/intake/runs/20260712T044950Z/manifest.json.
+
+### AUTOPILOT FUNNEL (Nicky "extract > cascade > pass@k on autopilot; no human except firing a batch", ~05:00Z 07-12): TWO uncommitted scripts (repo root, session 89fe6f6f):
+- **funnel_chain.sh LABEL INPUT OUTDIR [cascade|passk]** — cascade → (Qwen-slot-guarded, bracketed pgrep) pass@k → writes READY_FOR_FOLD.txt. HELD AT PASS@K: never folds (fold stays MANUAL — v1 is the weak gate, fold-review is the safety net). Holds gracefully if LM Studio down. Restartable.
+- **fire_batch.sh YEAR MONTH [CAT]** — THE ONLY HUMAN STEP: plan→approve→arming-gated hardened extraction (250-cap)→funnel_chain. e.g. `nohup ./fire_batch.sh 2026 3 &>fire.log &`.
+WIRED the two in-flight runs via detached watchers: (A) hardened Jan cascade PID 19612 → pass@k on its final_corpus (out/hardened_cascade_20260712T041410Z/); (B) Feb extraction PID 20185 → cascade → pass@k (out/auto_funnel_20260712T044950Z/). They serialize on the one Qwen slot. Qwen backend verified UP. Per-batch spend (~$3 cascade + ~$4-8 extraction, pass@k $0) is pre-authorized by the autopilot instruction; folding is NOT. Completion = READY_FOR_FOLD.txt in each OUTDIR. NOT committed (operational scripts, like the gate_*.sh).
+
+### Mission claim — autopilot-band-audit (ACTIVE, session 89fe6f6f, ~19:04Z 07-12): Nicky "let's audit them" — pre-fold blind-derivation audit of the 41 band records from the two autopilot batches (20 Jan hardened_cascade_20260712T041410Z + 21 Feb auto_funnel_20260712T044950Z). Audit dir out/audits/autopilot_band_audit_20260712T190340Z/ (manifest, 4 shards 11/10/10/10, 0 meta-join failures). Protocol: stage-1 BLIND derivation (statement+answer only, nameable-defect standard, field-standard carve-out) → stage-2 extraction fidelity (name-not-embed census — paper-local terms named but not defined, the defect class found in spot-check; fidelity vs source; modal_wrong rival-reading check) → orchestrator adjudication → tiered keep/remove/needs-human + report. 4 Fable shard agents in flight. $0 API, no corpus mutation, fold stays held. BOTH batches' READY_FOR_FOLD remain blocked pending this audit.
+
+### autopilot-band-audit CLOSED (~19:45Z 07-12): 41 fold-candidates audited (4 blind-derivation shard reviewers, both-direction rationales). **27 keep / 7 remove_ill / 7 needs_human.** DOMINANT FINDING: pass@k grader equivalence brittleness corrupts >=11/41 (27%) band labels (glyph/brace/constant-absorption/inequality-restatement equivalences graded wrong; several rows regrade OUT of band to solved) — **BLOCKING: $0 equivalence-aware regrade of both batches required before any fold**; both batches' full label sets suspect both directions. Extraction ill-posedness 7/41 ≈17% (better than retro 21-22% single-gate lanes); name-not-embed 8 hits/3-4 fatal → QA-prompt embed-don't-name fix warranted. Resolver eqref-RANGE bug (endpoints only) found (jan_18). R3 key-sign-flip alive (feb_30). fire_batch has NO cross-batch dedup (feb_38==jan_17, same theorem both batches — wire the disarmed batcher's uid ledger or dedup at fold). Full report: out/audits/autopilot_band_audit_20260712T190340Z/audit_report.md (+adjudicated_verdicts.jsonl, audit_summary.json). FOLD REMAINS HELD.
+
+### AUTOPILOT FOLD EXECUTED (Nicky "forget the regrade, just kill the bad problems and fold the good ones", ~20:15Z 07-12): **band_corpus 281→311 (+30 band), NEW sha 5fd087e91f9a3ca9… (2b6504/810d1608/01609862 all RETIRED — rebase any pins)**; wellposed_all 1997→2028 (+30 band +1 solved jan_08, mechanically verified 8/8); wellposed_band 309→339; manifest assembled_from[autopilot_janfeb_20260712] added. KILLED 7 (audit removes; killed_records.jsonl w/ reasons). PARKED 2 for Nicky (jan_05 clean-constant policy, jan_18 eqref-range repair). SKIPPED 1 on collision guard (fold/skipped.json). 6 folded band rows carry corpus_provenance.equivalence_dispute (reviewer-claimed grader equivalence, unconfirmed mechanically — mini_regrade.json; full equivalence regrade remains WAIVED by Nicky but flagged). Backups *.bak-pre-autopilotfold; 10 integrity checks pass; FOLD_MANIFEST.md in audit fold/ dir. Batcher ledger NOT updated (DISARMED; register on re-arm). Solved/misdirection/collapse/drop records from both batches (unaudited) remain in run dirs — NOT folded, separate decision.
+
+### UNFOLD + wellposed_band RECONCILE (Nicky, ~20:4xZ 07-12): autopilot fold REVERTED — all four corpus files restored byte-identical from backups (**band_corpus back to 281 / sha 2b6504…; sha 5fd087 is DEAD**; wellposed_all 1997; manifest entry removed). The 41 audited records revert to AUDITED-NOT-FOLDED (kill/park lists stand as recommendations in the audit dir). THEN wellposed_band.json reconciled to repair/rescue results: rebuilt against canonical band_corpus — **309→281, uid set now exactly matches band_corpus** (250 kept, 30 constructed incl. the 10 repaired rows, 1 pass@k-synced, 48 stale dropped incl. removed E1s + uid=None degenerates). Backup wellposed_band.json.bak-pre-bandreconcile. The wa/wb/bc trio is now mutually consistent for the first time since the qa_repair fold.
+
+### FEB FOLD EXECUTED (Nicky "fold in the most recent extraction", ~20:55Z 07-12): Feb batch (run 20260712T044950Z) audited band rows folded — **band_corpus 281→299, NEW sha 3a4ed9d5d5b6ead9… (2b6504 retired — rebase pins)**; wellposed_band 281→299 (stays in exact uid agreement with bc); wellposed_all 1997→2015; manifest assembled_from[autopilot_feb_20260712]. Folded 18 (14 clean keeps + 4 label-disputed w/ equivalence_dispute provenance); NOT folded: 3 audit removes (feb_26 name-not-embed, feb_30 key-sign-flip, feb_38 recall+dup); 0 collisions. **Jan batch remains AUDITED-NOT-FOLDED** (17 fold-eligible + jan_08-as-solved + 2 parked, lists in audit fold/ dir — one command to fold on Nicky's word). Backups *.bak-pre-febfold; FEB_FOLD_MANIFEST.md in audit fold/ dir. Feb's unaudited solved/collapse/drop records remain in run dirs.
+
+### JAN FOLD EXECUTED (Nicky "audit and fold Jan", ~21:05Z 07-12; audit = standing autopilot_band_audit): **band_corpus 299→311, NEW sha 1b9d5d6220409df3… (3a4ed9d5 retired — rebase pins)**; wellposed_band 299→311 (uid-synced); wellposed_all 2015→2028 (+12 band +1 solved jan_08 w/ label_correction provenance). OUT: 4 audit removes (jan_10/15/16/17), 2 parked for Nicky (jan_05 clean-constant policy, jan_18 eqref-range repair), jan_09 re-skipped (statement collision, standing). Both autopilot batches now FOLDED per audit; corpus trio mutually consistent. Backups *.bak-pre-janfold; JAN_FOLD_MANIFEST.md in audit fold/ dir.
+
+### REPAIR FOLD EXECUTED (Nicky "fold and re-score", 2026-07-16 ~00:2xZ 07-17): the day's audit→repair lane landed — **band_corpus 309→293, NEW sha `e0975e112f05d03e` (13164e3f retired — rebase pins)**; wellposed_band 293 (uid-synced); wellposed_all 2028→2021. OUT: all 26 confirmed-defective records (extraction_defect_check audits, evidence in `out/audits/extraction_defect_check_20260716T193020Z/`). IN: 10 repaired+source-verified records that re-scored band (fresh k=8 local-qwen labels, batch `repair_lane_20260716`); the other 9 repairs re-scored misdirection(5)/collapse(4) — in wellposed_all only (repaired statements grade harder than their defective originals; all nine 0/8). 7 unrepairable records dropped entirely (parked_records.jsonl). Backups `*.bak-pre-repairfold-20260716`; manifest entry `assembled_from_gguf.repair_lane_20260716`; 10 integrity checks pass. **OPEN: LoRA split (corpus_split_200_100.json) now stale** — 26 members removed (alias map = repaired_from in repair_lane/repaired_records.jsonl; holdout 100→91 effective) — split patch/regeneration NOT released; eval_paper_split (paper-level) unaffected. Cascade NOT re-run on repaired rows (source-anchored 2-ruler verification instead; noted per-row in wellposed_note).
+
+### LoRA split RECOVERED + dup audit (Nicky "recover everything / check for duplicates", 2026-07-16 reintegration session): **evalharness/data/corpus_split_200_100.json PATCHED** — all 19 records with a living successor aliased via repaired_from; only the 7 unrepairable dropped. holdout 100→**97** (88 intact + 9 aliased; dropped 8a5c955e/448c8e70/c1e9c2a9), train 200→**196** (186 + 10 aliased; 4 dropped). Verified: 0 uid contamination, 0 identical-statement train↔holdout leakage, 0 paper-level leak, all uids resolve. **CAVEAT stamped in-file: split is NO LONGER band-pure** — recover-everything retains 9 band-exited repairs (holdout 94 band/3 non-band [misdirection×2, collapse×1]; train 190/6). Anchors (10+10) untouched, intact in wellposed_all (not band by design). 3 holdout_papers now have no surviving uid (2508.12364, 2604.27278, 2603.12786) — paper-level lists left as-is per unaffected-by-repair rule; flag if eval_paper_split cares. Backup: corpus_split_200_100.json.bak-pre-recover-20260716. Patch metadata + full alias map under key `repair_patch_20260716`.
+**DUP AUDIT (corpus, clean):** band_corpus 0 uid dups / 0 true statement dups; wellposed_all 0 uid dups / 0 true statement dups; 0 repaired-vs-corpus collisions. Two prefix-collision false positives investigated and cleared: 7068a207≠dd063fe6 (same paper 2512.18170, same answer, DIFFERENT full statements — sibling theorems sharing a setup sentence) and 344ef64d≠f1f6a695 (different papers, different statements+answers, shared Gronwall preamble). Corpus sha e0975e11 unchanged by this work (split-only).
+
+### LoRA split → BAND-PURE (Nicky "drop the 9 band-exits, keep it band-pure", supersedes the recover-everything revision minutes earlier): **holdout 97→94, train 196→190.** Dropped the 9 repaired band-exits (holdout: a3ebc1dc/18c87e62 misdirection + deb980db collapse; train: 6379e434/1571e1f8/39921f80 misdirection + def001f4/56ea03d9/16e0f30d collapse). INVARIANT NOW ENFORCED + verified: every uid in holdout_uids/train_uids is a member of band_corpus @ e0975e112f05d03e; 0 contamination, 0 dups. Mixed-label WARNING removed (no longer applies). The 9 band-exits remain in wellposed_all with their labels and stay recoverable via repair_patch_20260716.alias_map_applied if a mixed split is ever wanted. Net from original: holdout 100→94 (6 lost: 3 unrepairable + 3 band-exits), train 200→190 (10 lost: 4 + 6). holdout_papers with no surviving uid now 6 (was 3) — paper lists still untouched; flag if eval_paper_split cares. Backup .bak-pre-bandpure-20260716; corpus sha unchanged (split-only).
+
+### Paper lists FIXED + **PRE-EXISTING CROSS-FILE CONTAMINATION FOUND** (Nicky "fix the paper lists too", 2026-07-16):
+FIXED in corpus_split_200_100.json, recomputed from the band-pure uid buckets: **holdout_papers 90→84** (dropped 2508.12364, 2601.04324, 2603.12786, 2604.27278, 2605.11754, 2605.13389 — all verified to have ZERO band_corpus records; their only band rows died in the repair fold, nothing evaluable lost), **eval_papers 107→101** (= holdout ∪ anchor papers; the 17 anchor-only papers carry 0 band records BY DESIGN — anchors are solved/fail — and are RETAINED), **train_papers_n 167→163**. Verified: holdout_papers ≡ papers(holdout_uids), eval_papers ≡ holdout∪anchors, every holdout paper has ≥1 band record, 0 paper-level train∩holdout leak, split still band-pure, corpus sha unchanged. Left untouched deliberately: created/rng_seed/cascade_band_total(309) = freeze provenance, not current state. Backup .bak-pre-paperfix-20260716.
+**⚠ UNRESOLVED, NEEDS NICKY — cross-file conflict (PRE-EXISTING, not patch-induced):** corpus_split_200_100 TRAINS on **21 papers that eval_paper_split.json declares eval-only** (its rule: "ANY record whose arxiv_id is in eval_papers is EXCLUDED from training"); 13 holdout papers also sit in that eval set. Verified 21 in the ORIGINAL frozen split (bak-pre-recover) — shipped this way. Cause: independent generation (corpus_split 07-15/seed 20260715 vs eval_paper_split 07-14/seed 20260714), never reconciled. **Impact: training on this split contaminates the paper-level eval.** NOT auto-fixed: resolution either drops ~21 papers of train records (material shrink) or declares the two protocols independent — design call. Recorded in-file under repair_patch_20260716.paper_lists_fix.UNRESOLVED_CROSS_FILE_CONFLICT.
+
+### SPLIT UNDONE + RETIRED; LoRA = SKELETON ONLY (Nicky "undo split / only skeleton for LoRA, no split yet / single source of truth corpus", 2026-07-16):
+**CORRECTION to this session's earlier 21-paper alarm: it was MOOT.** `corpus_split_200_100.json` has NO code consumer (`grep -rn corpus_split_200_100 --include=*.py` → nothing; referenced only in this ledger). It was an orphan artifact from 07-15, never wired into the harness — so the 21 train-papers-vs-eval_paper_split conflict contaminated nothing. The alarm was correct about the file and wrong about the stakes; recorded so the ledger isn't left with a false red flag.
+**UNDONE:** corpus_split_200_100.json restored to its ORIGINAL frozen bytes (verified byte-equal; all three 07-16 patches — recover / band-pure / paper-lists — reverted, patch keys gone, holdout_n back to 100 / train_n 200).
+**RETIRED** (non-destructive, files preserved) → `evalharness/data/retired_20260716/` with README: corpus_split_200_100.json + its 3 .bak stages, holdout_uids.txt, train_uids.txt (the latter two were stale copies of a build_eval_set OUTPUT, mistaken for inputs). `evalharness/data/` now holds only `eval_paper_split.json`.
+**STILL LIVE + CORRECT:** `build_eval_set.py` already implements single-source-of-truth — sha-pinned eval_paper_split.json (110a4bf27320f2b1, verified) + derives train_uids from the corpus with leakage asserts, writing fresh output every run. Do not rebuild it.
+**THE REAL GAP (skeleton's core):** build_eval_set pins the SPLIT sha but **NOT the corpus sha** — no corpus sha anywhere in evalharness/src. A corpus fold silently changes the derived sets. Corpus has moved 4× in 6 days.
+**SKELETON WRITTEN:** `docs/lora_execution_skeleton.md` (slug lora-eval-execution) — C1 corpus sha pin, C2 split as derived view recorded by (corpus_sha, seed, rule) in a split_manifest, never a stored uid list; C3 band-purity/paper-disjoint/anchor asserts as code; C4 recommend keeping eval_paper_split frozen (an eval holdout SHOULD be frozen) but record its corpus-of-origin. Binds findings F1 repaired-grade-harder, F2 fabricated sharpness, F3 label instability, F4 dup-detect on FULL statements, F5 anchors aren't band by design. Nicky arms checkboxes at paste. Corpus sha e0975e11 unchanged throughout (no corpus writes this session).
+
+### COMMITTED (Nicky "commit the skeleton and the retire", 2026-07-16): two commits, NOT pushed.
+- **d99d38d** `evalharness: import untracked harness; retire orphan split artifacts` — 31 files. NOTE: this IMPORTS the eval harness authored 07-15 by a prior session that had never been committed (tests verified green, 42 passed, before import; .gitignore already excluded all cache junk). The 07-16 retire lands in the same commit because git had no prior state to diff the moves against. data/ now holds only eval_paper_split.json.
+- **b093143** `docs: LoRA execution skeleton — corpus as the single source of truth` — the replacement for the retired split artifact class.
+Verified at commit time: harness tests 42 pass, main three-suite 1118 pass, no live evalharness process, corpus sha e0975e11 untouched (zero corpus writes this session), nothing else swept in.
+
+### STATUS ENDPOINT → SSH-TUNNEL-ONLY (Nicky's decision, 2026-07-25, executed same day): the loratrain RUNBOOK's box-side status server is no longer internet-facing. Box binds container-loopback (`run_remote_train.sh` http.server `--bind 127.0.0.1`, suite-asserted); pod exposes **SSH 22 ONLY** (§1.2 — no TCP 8000 mapping); operator polls through an SSH local-forward (`python3 -m loratrain.tunnel [--execute]`, new module, dry-run default, mocked-subprocess tested). `config.py` contract: TRAIN_SERVER_IP = ssh/scp target ONLY; TRAIN_SERVER_PORT = M4-local tunnel port; TRAIN_SERVER_URL = tunnel-local (validate_config now enforces that form); new non-operator constant TRAIN_STATUS_BOX_PORT=8000 drift-tripwired against the .sh. **Operator-editable block NOT touched** — RUNBOOK Appendix A carries the proposed diff (SSH_PORT field + tunnel-local URL derivation line) for Nicky; placeholder IP keeps everything green pre-application, real IP + unapplied diff fails validate_config loudly by design. RUNBOOK D-R1/§1/§6/§9/App A+B + README updated. loratrain suite 80→**95 passed** (single-source IP scan green); root suites untouched (`testpaths=["tests"]` never collected loratrain). All UNCOMMITTED per standing rule. Parallel session's §0.4-EXECUTED llama.cpp block left untouched.
+
+### APPENDIX A APPLIED (Nicky "apply the Appendix A diff", 2026-07-25, tunnel lane): config.py operator block now tunnel-era — TRAIN_SERVER_SSH_PORT=22 added (per-pod external→22, set at RUNBOOK §1.3; TRAIN_SSH_PORT env demoted to fallback, config wins), TRAIN_SERVER_URL line rewritten literal tunnel-local `http://127.0.0.1:{TRAIN_SERVER_PORT}`, IP/PORT comments now say ssh-target-only / M4-local-tunnel-port. validate_config range-checks SSH_PORT when present (absence tolerated — env-fallback state). RUNBOOK D-R1/§1.3/App A flipped to APPLIED (§1.3 derives the TRAIN_SSH_PORT export FROM config); README snippet updated; upload_guard/tunnel docstrings de-staled; +4 tests (config-wins resolution, shipped default, SSH_PORT validation, absent-tolerated). Suite on merged tree: **127 passed** (tunnel lane 99 + W2 lane's 28 test_build_dataset, all green together). Still UNCOMMITTED.

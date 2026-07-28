@@ -66,6 +66,7 @@ from icepick.contracts.manifests import (
 from icepick.processing.pipeline import run as run_pipeline
 from icepick.processing.poser.config import POLICY_INTERSECT
 from icepick.processing.poser.runner import run as run_wellposed
+from icepick.batcher.cli_glue import build_batcher_parser as _build_batcher
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -111,6 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
     _build_processing(sub)
     _build_allocation(sub)
     _build_agent(sub)
+    _build_batcher(sub)
 
     return parser
 
@@ -454,6 +456,14 @@ def _build_processing(sub) -> None:
     )
     p.add_argument("--anthro-key-file", default=None, help="anthro_key.env for ANTHROPIC_API_KEY.")
     p.add_argument("--openai-key-file", default=None, help="openai_key.env for OPENAI_API_KEY.")
+    p.add_argument(
+        "--qwen-key-file",
+        default=None,
+        help=(
+            "raw-token or KEY=VALUE file holding a bearer key for a remote "
+            "qwen_http gateway; omit for local endpoints"
+        ),
+    )
     p.add_argument(
         "--max-concurrent",
         type=int,
@@ -1151,6 +1161,7 @@ def _run_pass_at_k(args) -> int:
         anthropic_key_file=Path(args.anthro_key_file) if args.anthro_key_file else None,
         openai_key_file=Path(args.openai_key_file) if args.openai_key_file else None,
         backend_url=args.backend_url,
+        qwen_key_file=Path(args.qwen_key_file) if args.qwen_key_file else None,
         allow_live_calls=args.allow_live_calls,
         i_understand_paid_backend_is_off_policy=args.i_understand_paid_backend_is_off_policy,
         keep_garbage=args.keep_garbage,

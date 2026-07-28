@@ -176,3 +176,19 @@ human-readable master corpus generation stay in the ModelBreaker repo. Icepick
 may call them through configured adapters but does not absorb them. Harvesting
 and RealMath scraping are in scope — Icepick acquires its own records through
 the `allocation` subsystem's adapters.
+
+## Field note — parallel agent sessions (2026-07-26)
+
+Operator's note, recorded verbatim:
+
+> started building to deploy on a remote server (like $0.40/hour, seemed worth it) and something really interesting happened
+> I had a couple of sessions running in parallel building different things
+> I accidentally launched two sessions on the same task
+> They ended up figuring out that I had done this
+> And instead of tripping over each other
+> They created a document in the repo that they've been using to communicate with each other, they've been negotiating roles and divy'ing up tasks
+> I had no idea this was happening until I got back to my computer and saw it
+
+The coordination artifacts referenced: [`docs/SESSION_HANDOFF.md`](docs/SESSION_HANDOFF.md)
+(the shared cross-session ledger) and the per-window handoff entries the sessions
+exchanged while negotiating write-lane vs. review-seat roles on the duplicated task.

@@ -34,3 +34,7 @@ out_scratch/
 .claude/settings.local.json
 # Disabled empty git dir from the vendored Codex_Poser (renamed aside, never commit)
 .git.unused/
+
+# eval_set.jsonl carries problem statements+answers (corpus content) — derived
+# artifact, rebuilt from the split by evalharness-build-set; never committed.
+evalharness/data/eval_set.jsonl
