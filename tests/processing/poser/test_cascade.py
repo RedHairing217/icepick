@@ -628,6 +628,63 @@ def test_advisory_stage_does_not_filter_and_writes_review_file(tmp_path):
     assert manifest["stages"][0]["flagged_for_review_path"] is None
 
 
+def test_advisory_stage_excludes_error_from_final_corpus(tmp_path):
+    """Advisory claude:openai errors on uid_mid (e.g. an unparseable judge
+    reply). Unlike a content rejection (ill_posed), an error is not a
+    judgment the record failed — the stage never actually produced an
+    opinion. Errors must stay excluded from survivors/final_corpus even at
+    an advisory stage: fail-closed on membership, but not fatal (the run
+    completes normally and the uid is still visible via flagged_for_review,
+    counts, and error_uids)."""
+    stages = parse_stages(["codex:openai", "claude:openai?advisory"])
+    cfg = CascadeConfig(
+        stages=stages, mode="production", enable_judge_tier=False,
+        output_dir=tmp_path, max_retries=0,
+    )
+    verdicts_codex = {
+        ("codex:openai", "uid_good"): [_wp("uid_good", STATUS_WELL_POSED, "codex:openai")],
+        ("codex:openai", "uid_mid"):  [_wp("uid_mid",  STATUS_WELL_POSED, "codex:openai")],
+    }
+    error_v = PoserVerdict(
+        uid="uid_mid", source="", verdict_status=STATUS_ERROR,
+        verdict_score=0.0, poser_name="claude:openai", poser_model="fake",
+        verdict_detail={"error_reason": "judge replies not parseable"},
+    )
+    verdicts_claude = {
+        ("claude:openai", "uid_good"): [_wp("uid_good", STATUS_WELL_POSED, "claude:openai")],
+        ("claude:openai", "uid_mid"):  [error_v],
+    }
+    codex = _RoutingFakeAdapter(BUILD_CODEX, verdicts_codex)
+    claude = _RoutingFakeAdapter(BUILD_CLAUDE, verdicts_claude)
+    outcome = run_cascade(
+        cfg=cfg,
+        records=_records(n=2),
+        adapter_overrides={BUILD_CODEX: codex, BUILD_CLAUDE: claude},
+    )
+
+    final = [json.loads(l) for l in outcome.final_corpus_path.read_text().splitlines() if l.strip()]
+    assert [r["uid"] for r in final] == ["uid_good"]
+    assert outcome.final_corpus_count == 1
+
+    advisory = outcome.stages[1]
+    assert advisory.stage.advisory is True
+    assert advisory.survivor_uid_count == 1
+    assert advisory.counts.get(STATUS_ERROR) == 1
+    assert advisory.error_uids == ["uid_mid"]
+
+    # Still visible for human triage, same as a content rejection would be.
+    flagged = [json.loads(l) for l in advisory.flagged_for_review_path.read_text().splitlines() if l.strip()]
+    assert [f["uid"] for f in flagged] == ["uid_mid"]
+    assert flagged[0]["verdict_status"] == STATUS_ERROR
+
+    # Not fatal: exit path is a normal CascadeOutcome, and the error is
+    # surfaced in the cascade manifest per stage (uid list + count).
+    manifest = json.loads(outcome.manifest_path.read_text())
+    entry = manifest["stages"][1]
+    assert entry["error_uids"] == ["uid_mid"]
+    assert entry["counts"]["error"] == 1
+
+
 def test_gating_stage_has_no_review_file(tmp_path):
     stages = parse_stages(["codex:openai"])
     cfg = CascadeConfig(

@@ -80,6 +80,85 @@ class WellPosednessScoringTests(unittest.TestCase):
         self.assertEqual(result.status, "pass")
         self.assertEqual(result.score, 1.0)
 
+    def test_explicit_computed_provenance_keeps_bypass(self) -> None:
+        """Explicit provenance="computed" must still take the by-construction
+        bypass — the fail-closed fix must not change behavior for records
+        that genuinely declare computed provenance."""
+        record = PassKRecord.from_raw(
+            {
+                "source": "generated",
+                "provenance": "computed",
+                "family": "arithmetic",
+                "statement": "Find the value of 2 + 2.",
+                "truth": "4",
+                "n_correct": 4,
+                "n_wrong": 4,
+            },
+            rid=0,
+        )
+
+        self.assertTrue(record.is_computed)
+
+        result = score_record(record)
+
+        self.assertEqual(result.status, "pass")
+        self.assertEqual(result.score, 1.0)
+        self.assertIn("by construction", result.detail)
+
+    def test_missing_provenance_does_not_bypass_judge(self) -> None:
+        """Regression test: a record with NO provenance field (but a
+        ``family`` set, e.g. a generated-family record whose provenance
+        tag was dropped) must NOT be inferred as "computed" and must NOT
+        take the well-posed-by-construction bypass. It should flow through
+        the normal judge path like any extracted/unknown-provenance record."""
+        record = PassKRecord.from_raw(
+            {
+                "source": "generated",
+                "family": "arithmetic",
+                "statement": "Determine x such that x^2 = 4.",
+                "truth": "2",
+                "n_correct": 1,
+                "n_wrong": 1,
+            },
+            rid=0,
+        )
+
+        self.assertEqual(record.provenance, "unknown")
+        self.assertFalse(record.is_computed)
+
+        # Without a judge: must defer, not silently pass.
+        deferred = score_record(record)
+        self.assertEqual(deferred.status, "defer")
+        self.assertEqual(deferred.score, 0.5)
+
+        # With a judge: must actually be judged (not short-circuited).
+        judged = score_record(
+            record, judge=_judge_reply(determined=True), judge_samples=3, judge_uphold=2
+        )
+        self.assertEqual(judged.status, "pass")
+        self.assertEqual(judged.signals["judge"]["samples_parsed"], 3)
+        self.assertNotIn("by construction", judged.detail)
+
+    def test_none_and_empty_provenance_normalise_to_unknown(self) -> None:
+        """None and empty-string provenance are as unset as a missing key —
+        all three must normalise the same way (never "computed")."""
+        for provenance_value in (None, ""):
+            with self.subTest(provenance_value=provenance_value):
+                record = PassKRecord.from_raw(
+                    {
+                        "source": "generated",
+                        "provenance": provenance_value,
+                        "family": "arithmetic",
+                        "statement": "Determine x such that x^2 = 4.",
+                        "truth": "2",
+                        "n_correct": 1,
+                        "n_wrong": 1,
+                    },
+                    rid=0,
+                )
+                self.assertEqual(record.provenance, "unknown")
+                self.assertFalse(record.is_computed)
+
     def test_dangling_reference_flags_extracted_record(self) -> None:
         record = PassKRecord.from_raw(
             {

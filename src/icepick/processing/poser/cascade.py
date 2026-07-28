@@ -253,6 +253,10 @@ class CascadeStageOutcome:
     retry_events: List[dict] = field(default_factory=list)
     # Advisory stages only: records the stage would have rejected.
     flagged_for_review_path: Optional[Path] = None
+    # uids with a final verdict_status of STATUS_ERROR at this stage (after
+    # retries are exhausted). Never survivors, advisory or not — see the
+    # fail-closed note in _run_stage_with_retries.
+    error_uids: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -460,6 +464,7 @@ def _run_stage_with_retries(
     # survivor records list.
     stage_normalised_path = stage_subdir / f"{stage.combo.slug()}_normalised.jsonl"
     passing_uids: set = set()
+    error_uids: List[str] = []
     with stage_normalised_path.open("w", encoding="utf-8") as fh:
         for uid in [r.get("uid") for r in records]:
             v = all_verdicts.get(uid)
@@ -468,15 +473,27 @@ def _run_stage_with_retries(
             fh.write(json.dumps(v.to_jsonl_row()) + "\n")
             if v.verdict_status == STATUS_WELL_POSED:
                 passing_uids.add(uid)
+            elif v.verdict_status == STATUS_ERROR:
+                error_uids.append(uid)
 
-    # Advisory stages do not filter: every input record survives, and the
-    # ones the stage would have rejected land in flagged_for_review.jsonl
-    # (record + the stage's verdict) for human triage.
+    # Advisory stages do not filter on CONTENT verdicts (ill_posed/defer):
+    # every input record the stage actually judged survives, and the ones
+    # the stage would have rejected land in flagged_for_review.jsonl
+    # (record + the stage's verdict) for human triage. STATUS_ERROR is not
+    # a content judgment though — it means the stage never produced a real
+    # opinion (e.g. "judge replies not parseable" after retries are
+    # exhausted), so it is excluded from survivors here exactly like a
+    # non-advisory stage excludes it: fail-closed on membership, not fatal
+    # (no exception is raised, the run continues; the uid is still visible
+    # via flagged_for_review.jsonl, counts["error"], and error_uids below).
     stage_passed_path = stage_subdir / "passed_records.jsonl"
     flagged_path: Optional[Path] = None
+    error_uid_set = set(error_uids)
     if stage.advisory:
         with stage_passed_path.open("w", encoding="utf-8") as fh:
             for record in records:
+                if record.get("uid") in error_uid_set:
+                    continue
                 fh.write(json.dumps(record) + "\n")
         flagged_path = stage_subdir / "flagged_for_review.jsonl"
         with flagged_path.open("w", encoding="utf-8") as fh:
@@ -514,13 +531,16 @@ def _run_stage_with_retries(
         normalised_path=stage_normalised_path,
         passed_records_path=stage_passed_path,
         input_uid_count=len(records),
-        survivor_uid_count=len(records) if stage.advisory else len(passing_uids),
+        survivor_uid_count=(
+            len(records) - len(error_uid_set) if stage.advisory else len(passing_uids)
+        ),
         counts=counts,
         wall_clock_seconds=0.0,
         token_usage=token_usage,
         estimated_cost_usd=stage_cost,
         retry_events=retry_events,
         flagged_for_review_path=flagged_path,
+        error_uids=error_uids,
     )
 
 
@@ -595,6 +615,7 @@ def _stage_manifest_entry(so: CascadeStageOutcome) -> dict:
         "input_uid_count": so.input_uid_count,
         "survivor_uid_count": so.survivor_uid_count,
         "counts": so.counts,
+        "error_uids": so.error_uids,
         "wall_clock_seconds": so.wall_clock_seconds,
         "wellposed_manifest_path": str(so.wellposed_manifest_path),
         "normalised_path": str(so.normalised_path),

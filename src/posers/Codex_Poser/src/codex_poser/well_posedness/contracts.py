@@ -217,13 +217,21 @@ def _params(raw: dict[str, Any], family: str | None) -> dict[str, Any] | None:
 
 
 def _normalise_provenance(raw: dict[str, Any], family: str | None) -> str:
+    """Normalise the raw ``provenance`` field.
+
+    Fail-closed: ``computed`` provenance grants the well-posed-by-
+    construction bypass in ``scoring.py`` (the record is never sent to a
+    judge), so that category must never be *inferred* — only an explicit
+    ``provenance: "computed"`` on the input row may return "computed" here.
+    Missing, empty, or unrecognised provenance normalises to "unknown"
+    regardless of ``family`` or ``truth_policy``, which routes the record
+    through the ordinary defer/judge path exactly like extracted, manual,
+    or external records.
+    """
     value = str(raw.get("provenance") or "").strip().lower()
     if value in {"computed", "extracted", "manual", "external", "unknown"}:
         return value
-    truth_policy = str(raw.get("truth_policy") or "").strip().lower()
-    if truth_policy == "trusted" and family:
-        return "computed"
-    return "computed" if family else "extracted"
+    return "unknown"
 
 
 def _normalise_label(
