@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loratrain"
+version = "0.1.0"
+description = "LoRA training arm for qwen3-8b on the pde625 band corpus (training only — measurement lives in evalharness/). See README.md."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+loratrain-build-dataset = "loratrain.build_dataset:main"
+loratrain-train = "loratrain.train_lora:main"
+loratrain-export = "loratrain.export_serve:main"
+loratrain-upload-guard = "loratrain.upload_guard:main"
+loratrain-verify-identity = "loratrain.verify_base_identity:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
