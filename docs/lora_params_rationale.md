@@ -75,5 +75,15 @@ hypothesis — supported by run 1 and *directionally consistent with* stage A's 
 40-record single-seed screen lacks the power to CONFIRM flatness; softened 2026-07-28) — that **the loss surface w.r.t.
 hyperparameters is flat-to-negative around the defaults because data volume, not
 configuration, is the binding constraint.** Every config fits 160 examples; none can
-extract information the examples don't contain. The documented next lever is N≈1000,
-not more knobs.
+extract information the examples don't contain.
+
+**[SUPERSEDED 2026-07-29 — n=12 outcome.]** The "next lever is N≈1000" line originally
+here is retired. The 12-seed consistency run closed at ≈+1.7pp, not distinguishable
+from zero (sign p=.344, t p=.122), on a recipe carrying two unfixed dataset defects
+(full-sequence loss; gradient weight = `n_correct`). Per decision **D8**
+(`docs/lora_decisions_2026-07-28.md`), scaling N addresses *magnitude*, not
+*consistency*, and at N≈1000 would land on the same defective recipe — both defects are
+structural and inherit unchanged. **The indicated next experiment is dataset build v2**
+(prompt/completion masking + per-record weight cap/1-per-uid + explicit backfill-weight
+ruling), with N≈1000 sequenced after it. Final campaign status:
+`docs/lora_consistency_verdict.md`.

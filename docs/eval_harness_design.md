@@ -6,10 +6,18 @@ corpus — with a number that survives scrutiny.
 
 Implemented: `evalharness/` scaffold (build_eval_set.py, run_eval.py, report.py, tests, README) landed 2026-07-15, uncommitted — see `evalharness/README.md`. 42/42 evalharness tests green; root suite unaffected (975 passed, 3 skipped, before and after).
 
-**EXECUTED 2026-07-26/27** — baseline captured (eval-band 43/100, greedy, llama-server
-`b1-c0bc859`), three LoRA seeds trained and evaluated. Results:
-`docs/lora_campaign_results.md`. Two dated corrections below (split authority; serving
-engine) supersede the original text where marked.
+**EXECUTED + CLOSED 2026-07-26 → 07-29.** Baseline captured (eval-band 43/100, greedy,
+llama-server `b1-c0bc859`), then **12 control-config seeds** trained and evaluated under
+this protocol. **Final verdict: `docs/lora_consistency_verdict.md`** (the campaign
+deliverable) — at N=200 the effect is small-positive at best (≈+1.7pp) and *not*
+distinguishable from zero at n=12 (7+/3−/2 ties, sign p=.344, t p=.122, CI spans zero).
+An n=8 read had shown significance; its own pre-registered extension corrected it — the
+protocol's second self-correction. Supporting docs: `docs/lora_campaign_results.md`
+(results + adjudicated config corrections), `docs/lora_params_rationale.md` (why these
+hyperparameters), `docs/lora_decisions_2026-07-28.md` (decisions D1–D8).
+Two dated corrections below (split authority; serving engine) supersede the original
+text where marked. **This harness performed as designed: it was capable of returning a
+null, and did.**
 
 ## Why this exists (the two failure modes it forecloses)
 
