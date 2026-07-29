@@ -2,8 +2,10 @@
 
 > **SUPERSEDED 2026-07-29 — the verdict does not survive the D2 extension to n=12.**
 > The four extension seeds landed at 0, −1, −1, −2 (the campaign's first negatives):
-> sign test 7+/3−/2 ties p=.344; mean +1.67pp, t(11)=1.675 p=.122; 95% CI
-> [−0.45, +3.79] spans zero. See "n=12 update" at the end of this file. The n=8
+> sign test 7+/3−/2 ties p=.344 (two-sided); mean +1.67pp, t(11)=1.675 p=.122; 95% CI
+> [−0.45, +3.79]. The n=8 SIGNIFICANCE does not survive; the positive DIRECTION does
+> (9/12 seeds ≥0, magnitudes +24 vs −4). See "n=12 update" at the end of this file —
+> and note the phrasing correction of 2026-07-29 there. The n=8
 > analysis below is retained as the historical record of what a favorable-tail
 > read looks like — and of the replication protocol correcting itself.
 
@@ -156,9 +158,29 @@ that the 3-seed protocol caught, the 8-seed sweep was an overclaim that the 12-s
 protocol caught. P(improve) point estimate: 0.70 (7/10 non-ties), Wilson 95%
 [0.40, 0.89].
 
-**Honest one-line status: at N=200 training examples, the pde625 dataset's holdout
-effect is small-positive at best (point estimate ≈ +1.7pp) and not distinguishable
-from zero at n=12 seeds; no seed moved outside [−2, +11]; anchors held everywhere.**
+**Honest one-line status: at N=200 training examples, the pde625 dataset produces a
+small, directionally consistent positive effect — 9/12 seeds >= 0 (7 strictly positive,
+3 negative, 2 ties), mean +1.67pp, net +20pp across 12 runs, with positive excursions
+to +11 against a worst case of -2. It does NOT reach conventional significance at n=12
+(one-sided sign p = .17, one-sided t p = .061), so it must not be claimed as
+statistically established. But the distribution is asymmetric in a way symmetric noise
+around zero does not produce: positive magnitudes sum +24 against -4 for the negatives,
+and the downside is bounded at -2 while the upside reaches +11. Proof of concept holds
+— the dataset moves the model in the intended direction more often than not, ruling out
+coin-flip behavior. Practical significance at this scale is minimal: this is not an
+end-user-visible improvement.**
+
+[PHRASING CORRECTED 2026-07-29, Nicky's challenge — upheld.] The earlier wording here,
+"not distinguishable from zero," was wrong and has been retired everywhere it appeared.
+It is frequentist shorthand for p > .05 that reads as "no evidence of signal," which
+these data contradict: failing to reject a null is not evidence for it. The accurate
+claim separates the two questions — DIRECTION is well supported (75% non-negative,
+strongly asymmetric magnitudes, positive mean); STATISTICAL SIGNIFICANCE is not reached
+at n=12; PRACTICAL significance is minimal. One methodological note retained from the
+original correction: the 7-positive/1-tie/0-negative pattern is the FIRST 8 seeds
+specifically, and quoting it alone is the favorable subset — the same selection error
+seed 1's +11 represented. The full 12 still supports the positive read, just less
+dramatically.
 
 Still-standing structural results: F4 seed-level variance ratio at k=12 = **0.91**
 (χ²(11) = 9.96, p = .53) — adapters remain statistically interchangeable, seed totals

@@ -9,10 +9,12 @@ Implemented: `evalharness/` scaffold (build_eval_set.py, run_eval.py, report.py,
 **EXECUTED + CLOSED 2026-07-26 → 07-29.** Baseline captured (eval-band 43/100, greedy,
 llama-server `b1-c0bc859`), then **12 control-config seeds** trained and evaluated under
 this protocol. **Final verdict: `docs/lora_consistency_verdict.md`** (the campaign
-deliverable) — at N=200 the effect is small-positive at best (≈+1.7pp) and *not*
-distinguishable from zero at n=12 (7+/3−/2 ties, sign p=.344, t p=.122, CI spans zero).
-An n=8 read had shown significance; its own pre-registered extension corrected it — the
-protocol's second self-correction. Supporting docs: `docs/lora_campaign_results.md`
+deliverable) — at N=200 the dataset produces a **small, directionally consistent
+positive effect** (9/12 seeds ≥0, mean +1.67pp, net +20pp, magnitudes +24 vs −4,
+worst run −2) that does **not** reach conventional significance at n=12 (one-sided
+sign p=.17, t p=.061). Direction supported; significance not established; practical
+effect minimal. An n=8 read had shown significance; its own pre-registered extension
+corrected that — the protocol's second self-correction. Supporting docs: `docs/lora_campaign_results.md`
 (results + adjudicated config corrections), `docs/lora_params_rationale.md` (why these
 hyperparameters), `docs/lora_decisions_2026-07-28.md` (decisions D1–D8).
 Two dated corrections below (split authority; serving engine) supersede the original

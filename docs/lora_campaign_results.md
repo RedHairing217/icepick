@@ -136,11 +136,22 @@ approved D2 extension (4 more control seeds: 20260731/0801/0802/0803, same confi
 verbatim, train losses inside the existing band) landed at **0, −1, −1, −2** — the
 campaign's first negative deltas. Pre-registered n=12 analysis: **7+/3−/2 ties, sign
 p = .344 (threshold was 10/12); mean +1.67pp, t(11) = 1.675, p = .122; CI
-[−0.45, +3.79] spans zero.** The n=8 significance was a favorable-tail read corrected
-by its own extension — the protocol's second successful self-correction (run-1's
-seed 1 was the first). **Final campaign status at N=200: effect small-positive at
-best (≈+1.7pp point estimate), not distinguishable from zero at n=12; no seed outside
-[−2, +11]; anchors held in all 12 seeds.** F4 stays ≈1 at k=12 (0.91, p=.53) —
+[−0.45, +3.79].** The n=8 SIGNIFICANCE was a favorable-tail read corrected by its own
+extension — the protocol's second successful self-correction (run-1's seed 1 was the
+first). The positive DIRECTION, however, survives the extension.
+
+**Final campaign status at N=200 [phrasing corrected 2026-07-29 on Nicky's challenge —
+upheld]: the dataset produces a small, directionally consistent positive effect.
+9/12 seeds ≥ 0 (7 strictly positive, 3 negative, 2 ties); mean +1.67pp; net +20pp
+across 12 runs; positive magnitudes sum +24 vs −4 for negatives; upside reaches +11
+while the worst run in the entire campaign is −2. NOT statistically significant at
+n=12 (one-sided sign p = .17, one-sided t p = .061) — do not claim it as established.
+But "not distinguishable from zero" (the prior wording, now retired repo-wide) was
+wrong: it reads as "no evidence of signal," and symmetric noise around zero does not
+produce this asymmetry. Proof of concept holds — the dataset moves the model in the
+intended direction, ruling out coin-flip behavior. Practical significance is minimal:
+not an end-user-visible improvement. Anchors held in all 12 seeds; no seed outside
+[−2, +11].** F4 stays ≈1 at k=12 (0.91, p=.53) —
 adapters interchangeable, no eval-block artifact signature. Per the decisions doc's
 D5 null branch, the leading hypothesis for the small/absent effect is now the
 dataset's known masking defect; v2 is the indicated next experiment. Full analysis:

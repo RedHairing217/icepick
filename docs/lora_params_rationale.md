@@ -78,8 +78,10 @@ configuration, is the binding constraint.** Every config fits 160 examples; none
 extract information the examples don't contain.
 
 **[SUPERSEDED 2026-07-29 — n=12 outcome.]** The "next lever is N≈1000" line originally
-here is retired. The 12-seed consistency run closed at ≈+1.7pp, not distinguishable
-from zero (sign p=.344, t p=.122), on a recipe carrying two unfixed dataset defects
+here is retired. The 12-seed consistency run closed at a small, directionally
+consistent **+1.67pp** (9/12 seeds ≥0; magnitudes +24 vs −4) that does not reach
+conventional significance (one-sided sign p=.17, t p=.061) — direction supported,
+significance not established — on a recipe carrying two unfixed dataset defects
 (full-sequence loss; gradient weight = `n_correct`). Per decision **D8**
 (`docs/lora_decisions_2026-07-28.md`), scaling N addresses *magnitude*, not
 *consistency*, and at N≈1000 would land on the same defective recipe — both defects are
