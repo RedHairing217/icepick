@@ -164,10 +164,11 @@ Still-standing structural results: F4 seed-level variance ratio at k=12 = **0.91
 (χ²(11) = 9.96, p = .53) — adapters remain statistically interchangeable, seed totals
 vary exactly as independent per-record flips predict (this also argues against an
 eval-side shift between the R and R2 blocks); F3 record-level ICC ≈ 0.42, 32/100
-records frozen across all 12 adapters (21 never / 11 always solved). An
-instrument-integrity repro audit (re-eval of seed 20260726's adapter; greedy temp-0
-is deterministic, exact reproduction required) was run alongside — result recorded in
-`out/analysis/` and the session report.
+records frozen across all 12 adapters (21 never / 11 always solved). The
+instrument-integrity repro audit **PASSED**: seed 20260726 re-evaluated 07-29
+reproduced its 07-28 result exactly — 46/100, **0 per-record mismatches across all
+120 records** (`out/analysis/repro_audit_20260729.md`) — so the R2 deltas are genuine
+adapter behavior, not eval-environment drift.
 
 Consequence per the decisions doc's own D5 branch: *"If the verdict is null, v2's
 masking fix becomes the leading hypothesis for why"* — that branch is now live.
