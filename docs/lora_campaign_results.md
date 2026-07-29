@@ -130,3 +130,18 @@ consistent, causally attributable improvement IS demonstrated at n=8** — on a 
 whose two known dataset defects (full-sequence loss, weight = n_correct) remain
 unfixed, i.e. the effect exists despite them. Variance ratio at k=8 = 0.95 (p=.47):
 seed spread is measurement noise; adapters are statistically interchangeable.
+
+**n=12 UPDATE (2026-07-29) — the paragraph above is superseded in turn.** Nicky's
+approved D2 extension (4 more control seeds: 20260731/0801/0802/0803, same config
+verbatim, train losses inside the existing band) landed at **0, −1, −1, −2** — the
+campaign's first negative deltas. Pre-registered n=12 analysis: **7+/3−/2 ties, sign
+p = .344 (threshold was 10/12); mean +1.67pp, t(11) = 1.675, p = .122; CI
+[−0.45, +3.79] spans zero.** The n=8 significance was a favorable-tail read corrected
+by its own extension — the protocol's second successful self-correction (run-1's
+seed 1 was the first). **Final campaign status at N=200: effect small-positive at
+best (≈+1.7pp point estimate), not distinguishable from zero at n=12; no seed outside
+[−2, +11]; anchors held in all 12 seeds.** F4 stays ≈1 at k=12 (0.91, p=.53) —
+adapters interchangeable, no eval-block artifact signature. Per the decisions doc's
+D5 null branch, the leading hypothesis for the small/absent effect is now the
+dataset's known masking defect; v2 is the indicated next experiment. Full analysis:
+`docs/lora_consistency_verdict.md` n=12 section.

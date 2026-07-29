@@ -1,5 +1,12 @@
 # LoRA campaign — 8-seed consistency verdict (2026-07-28)
 
+> **SUPERSEDED 2026-07-29 — the verdict does not survive the D2 extension to n=12.**
+> The four extension seeds landed at 0, −1, −1, −2 (the campaign's first negatives):
+> sign test 7+/3−/2 ties p=.344; mean +1.67pp, t(11)=1.675 p=.122; 95% CI
+> [−0.45, +3.79] spans zero. See "n=12 update" at the end of this file. The n=8
+> analysis below is retained as the historical record of what a favorable-tail
+> read looks like — and of the replication protocol correcting itself.
+
 **Mission (Nicky, 2026-07-28):** demonstrate that the pde625 dataset CAUSES improvement.
 Small is fine; consistency is the claim. Magnitude search is a non-goal; selection on
 the holdout is forbidden.
@@ -122,3 +129,47 @@ with pre-refresh n=4 snapshots preserved alongside (`*_n4_snapshot_*.json`).
 Exact p-values recomputed with scipy (analyze.py brackets agree). Engine fingerprint
 `b1-c0bc859` verified live on both arms this session; NOTE it is response-level only —
 persisting it into eval artifacts is a v2 harness item.
+
+## n=12 update (2026-07-29) — D2 extension REVERSES the verdict
+
+Nicky approved D2 (2026-07-28); four more control seeds trained on the box
+(20260731/20260801/20260802/20260803, same `rc_R.json` hyperparams verbatim, dataset
+sha pre-flight `7fa7e5bf` PASS, train losses .4309–.4335 — inside the existing band)
+and evaluated with the byte-identical greedy protocol:
+
+| seed | stage | tuned | Δ pp | b / c | McNemar p | anchors kept | fail-solved |
+|---|---|---|---|---|---|---|---|
+| 20260731 | stageR2 | 43/100 | 0 | 20/20 | 1.0 | 9/10 | 0/10 |
+| 20260801 | stageR2 | 42/100 | **−1** | 18/17 | 1.0 | 10/10 | 1/10 |
+| 20260802 | stageR2 | 42/100 | **−1** | 22/21 | 1.0 | 9/10 | 1/10 |
+| 20260803 | stageR2 | 41/100 | **−2** | 19/17 | .868 | 10/10 | 1/10 |
+
+**Pre-registered n=12 analysis (the D2 design's own read):** deltas
+{+11, +1, +3, 0, +3, +1, +4, +1, 0, −1, −1, −2} — 7 positive / 3 negative / 2 ties.
+**Sign test p = .344** (10/12 was the significance threshold; 7 is nowhere near).
+Mean **+1.67pp**, SD 3.45, t(11) = 1.675, **p = .122**; 95% CI **[−0.45, +3.79]**.
+Leave-one-out (drop +11): mean +0.82, sign p = .51, t p = .18.
+
+**The n=8 significance was a favorable-tail read that its own pre-registered
+extension corrected.** Exactly as run-1's seed 1 alone would have been an overclaim
+that the 3-seed protocol caught, the 8-seed sweep was an overclaim that the 12-seed
+protocol caught. P(improve) point estimate: 0.70 (7/10 non-ties), Wilson 95%
+[0.40, 0.89].
+
+**Honest one-line status: at N=200 training examples, the pde625 dataset's holdout
+effect is small-positive at best (point estimate ≈ +1.7pp) and not distinguishable
+from zero at n=12 seeds; no seed moved outside [−2, +11]; anchors held everywhere.**
+
+Still-standing structural results: F4 seed-level variance ratio at k=12 = **0.91**
+(χ²(11) = 9.96, p = .53) — adapters remain statistically interchangeable, seed totals
+vary exactly as independent per-record flips predict (this also argues against an
+eval-side shift between the R and R2 blocks); F3 record-level ICC ≈ 0.42, 32/100
+records frozen across all 12 adapters (21 never / 11 always solved). An
+instrument-integrity repro audit (re-eval of seed 20260726's adapter; greedy temp-0
+is deterministic, exact reproduction required) was run alongside — result recorded in
+`out/analysis/` and the session report.
+
+Consequence per the decisions doc's own D5 branch: *"If the verdict is null, v2's
+masking fix becomes the leading hypothesis for why"* — that branch is now live.
+Analysis artifacts: `analyze_n12.py` / `analyze2_n12.py` (disclosed path-extensions),
+refreshed JSONs, n=8 snapshots preserved (`*_n8_snapshot_20260728.json`).
