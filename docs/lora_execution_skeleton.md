@@ -1,5 +1,15 @@
 # LoRA Eval Execution — window skeleton (corpus as single source of truth)
 
+> **CLOSED 2026-07-29 — executed in modified form; retained for the design arguments.**
+> Nicky's 2026-07-26 ruling reinstated a stored 200/100 split
+> (`evalharness/data/corpus_split_200_100.json`, sha `768436f4`, 7-record GGUF-7/8
+> training-only backfill declared in-file) — superseding this skeleton's
+> "derived view only, never a stored artifact" position — while the C1 corpus-sha-pin
+> principle below WAS adopted on the consumer side (loratrain `config.py` pins corpus
+> `e0975e11` + the full split sha; `build_dataset` runs a 21-step guard chain over
+> both). The campaign then ran to n=12 on that split; final verdict:
+> `docs/lora_consistency_verdict.md`.
+
 Prepared 2026-07-16 by the reintegration session (Fable-5) on Nicky's ruling: **"undo split /
 only skeleton for LoRA, no split yet / single source of truth corpus."** Mission slug:
 **lora-eval-execution**. No split exists and none should be created until this window runs —

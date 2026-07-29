@@ -32,10 +32,13 @@ trunk `main`.
 
 - Run tests (full, three suites):
   `python3 -m pytest tests/ src/posers/Claude_Poser/tests src/posers/Codex_Poser/tests --ignore=tests/integration`
-  → baseline **726 passed**. Repo-root `python3 -m pytest` → **605 passed,
-  3 skipped** (live tests skip without creds). Measured 2026-07-06, post
-  gpt-5.5 judge refactor. Below baseline = regression; if you add tests,
-  update these numbers in the same commit.
+  → baseline **1118 passed**. Repo-root `python3 -m pytest` → **975 passed,
+  3 skipped** (live tests skip without creds). Sub-repo suites (never collected
+  by root): `src/loratrain` **154 passed**; `evalharness` **40 passed + 2 KNOWN
+  failures** (they pin the frozen `eval_paper_split.json` retired by the
+  2026-07-26 split ruling — repoint is the evalharness lane's open item; do not
+  "fix" by restoring the file). Measured 2026-07-29. Below baseline =
+  regression; if you add tests, update these numbers in the same commit.
 - Scrape-path tests: `pytest tests/allocation/scrape/` after every change
   there. `tests/allocation/scrape/test_pacing.py` asserts EXACT backoff
   schedules — extend, never delete.
@@ -200,6 +203,9 @@ Suggested order: T1.1 → T2.3 → T1.2/T1.3 (verify done) → T2.4 investigatio
 | `src/icepick/allocation/bulk/INTERFACES.md` | arxiv_bulk adapter contract + fleet-build invariants |
 | `src/posers/AGENTS.md` | poser-local rules: judge-cache key semantics, model config |
 | `src/posers/*/README.md` | per-poser I/O contracts and CLIs |
+| `docs/eval_harness_design.md` | LoRA eval-harness method authority (engine parity, split, baseline protocol) |
+| `docs/lora_consistency_verdict.md` | LoRA campaign FINAL verdict (n=12, closed 2026-07-29) — read with `lora_campaign_results.md` + `lora_decisions_2026-07-28.md` |
+| `src/loratrain/README.md` + `RUNBOOK.md` | training-arm design (D1–D4) + remote-box recipe (reusable for dataset v2) |
 
 ## Codex-specific addendum
 

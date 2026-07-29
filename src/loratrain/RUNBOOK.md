@@ -1,8 +1,13 @@
 # RUNBOOK — remote LoRA training on a rented RunPod A40 (W3) + serve validation (W4)
 
-**Status: DRAFT (2026-07-25). Nothing in this document has been executed.** It is run
-by the operator when the W3 (weight-fetch + dataset-upload + train) and W4
-(llama.cpp/serve) gates open. Authority chain: `README.md` decisions D1–D4 bind this
+**Status: EXECUTED — campaign CLOSED (2026-07-29).** Drafted 2026-07-25; §0.4 and
+§4–§7 carry `-EXECUTED` annotations from run-1 (2026-07-26/27), and the same flow then
+ran the stage-A HP screen (6 configs), stage-R replication (5 seeds) and the D2
+extension (4 seeds) through 2026-07-29 — 12 control seeds total, box terminated after
+drain. Campaign verdict: `docs/lora_consistency_verdict.md` (n=12: improvement not
+demonstrated; ≈+1.7pp point estimate). This document remains the recipe for any future
+box round (e.g. dataset v2): it is run by the operator when the W3 (weight-fetch +
+dataset-upload + train) and W4 (llama.cpp/serve) gates open. Authority chain: `README.md` decisions D1–D4 bind this
 runbook; where this runbook is more specific, it refines — never overrides — them.
 This document is self-contained: an operator who has read only this file and
 `README.md` can run the whole flow.

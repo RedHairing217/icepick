@@ -1,8 +1,16 @@
 # loratrain — LoRA training arm for qwen3-8b on the pde625 band corpus
 
-Status: **W0 (design) + W1 (scaffold) + W2 (dataset builder — implemented,
-execution gated on the open split ruling) complete. W3+ are stubs, no training
-logic.**
+Status: **campaign COMPLETE (2026-07-29).** W0–W5 all executed: split ruled +
+dataset built (W2 — 700 verbatim rollouts, sha `7fa7e5bf`), then via the RUNBOOK's
+remote flow (guarded upload → `remote/` box-side trainer on a RunPod A40 →
+GGUF-convert → local llama-server eval) **12 control-config seeds** trained and
+holdout-evaluated (run-1 3 + stage-R 5 + D2 extension 4), plus a 6-config stage-A
+HP screen. Final verdict: `docs/lora_consistency_verdict.md` — holdout effect
+≈+1.7pp point estimate at N=200 training examples, **not distinguishable from zero
+at n=12 seeds** (the interim n=8 significance did not survive its pre-registered
+extension). Next experiment (Nicky-gated): dataset v2 with completion-only masking
+(`docs/lora_decisions_2026-07-28.md` D5). The module remains the reusable training
+arm for that round.
 Sub-repo, same pattern as `evalharness/` and `src/posers/*`: own `pyproject.toml`,
 stdlib-only, zero import dependency on icepick. This module **trains**; it never
 measures. Measurement belongs exclusively to `evalharness/` (design authority:
