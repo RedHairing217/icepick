@@ -34,8 +34,9 @@ trunk `main`.
   `python3 -m pytest tests/ src/posers/Claude_Poser/tests src/posers/Codex_Poser/tests --ignore=tests/integration`
   → baseline **1118 passed**. Repo-root `python3 -m pytest` → **975 passed,
   3 skipped** (live tests skip without creds). Sub-repo suites (never collected
-  by root): `src/loratrain` **185 passed** (154 + 31 dataset-v2 tests,
-  2026-07-29); `evalharness` **40 passed + 2 KNOWN
+  by root): `src/loratrain` **581 passed + 2 env-dependent skips** (185 + 396
+  dequant-base tests, 2026-07-30; the 2 skips are safetensors/transformers
+  cross-checks that only run where those packages exist, e.g. the train box); `evalharness` **40 passed + 2 KNOWN
   failures** (they pin the frozen `eval_paper_split.json` retired by the
   2026-07-26 split ruling — repoint is the evalharness lane's open item; do not
   "fix" by restoring the file). Measured 2026-07-29. Below baseline =

@@ -1,10 +1,25 @@
 """Box-side Qwen3-8B LoRA trainer (RUNBOOK section 6 / Appendix B).
 
-Runs ONLY on the rented CUDA box -- never imported by the loratrain test
-suite (``tests/test_remote_scripts.py`` only ``ast.parse``s this file).
-transformers/peft/trl/torch are imported lazily inside ``train()``
-(main-guarded code), never at module scope, so this file stays a plain,
-dependency-free script to anyone reading or syntax-checking it here.
+Runs ONLY on the rented CUDA box. transformers/peft/trl/torch are imported
+lazily inside ``train()`` (main-guarded code), never at module scope, so
+this file stays a plain, dependency-free script to anyone reading or
+syntax-checking it here. Most of ``tests/test_remote_scripts.py`` only
+``ast.parse``s this file for exactly that reason -- but a handful of pure,
+no-heavy-import helper functions (``_verify_base_dir_matches_scheme``,
+``_fatal``; review fix #5, 2026-07-30) ARE loaded directly via
+``importlib`` and exercised with real ``tmp_path`` fixture directories,
+since module import alone never touches torch/transformers/peft/trl (those
+stay inside ``train()``'s body) and the review explicitly asked for
+behavioral tests, not text scans, for this gate.
+
+Base-scheme provenance (T4, 2026-07-30): ``base_scheme``/
+``base_source_sha256`` ride straight from run_config.json's top level into
+each seed's ``run_manifest.json`` entry (except ``--smoke``, which never
+loads a run_config.json and marks its entries ``"smoke": true`` instead of
+fabricating a scheme -- review fix #6), and ``--base`` is verified against
+the CLAIMED scheme before any training starts (review fix #5) -- see
+``loratrain.verify_base_identity.check_same_base_scheme`` for why silently
+comparing runs across schemes must never happen.
 
 Two modes:
   --smoke   8 synthetic in-process chat examples (RUNBOOK D-R3): a trigger
@@ -45,6 +60,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -94,6 +110,69 @@ def _verify_dataset_receipt(dataset_path: Path) -> None:
         _fatal(f"{dataset_path} sha256={actual} != upload_receipt.json dataset_sha256={expected!r} -- refusing to train on a moved/rogue dataset.")
 
 
+def _verify_base_dir_matches_scheme(base_dir: Path, base_scheme: str, base_source_sha256) -> None:
+    """Hard-exit(2) before any training if ``--base`` doesn't actually look
+    like what ``base_scheme`` claims (review fix #5).
+
+    T4 originally only ECHOED ``base_scheme``/``base_source_sha256`` from
+    run_config.json into the manifest -- nothing checked that ``--base``
+    actually POINTS at weights matching that scheme. A
+    ``dequant_manifest.json`` left over from a prior dequant-scheme run (or
+    a stale ``--base`` pointing at the wrong directory) would train
+    silently against the wrong base while the manifest still claimed
+    whatever run_config.json said. This closes that gap:
+
+    - ``base_scheme == "dequant_q4km"``: ``dequant_manifest.json`` must
+      exist directly in ``base_dir``, its own ``base_scheme`` must match,
+      and (when run_config.json carried a ``base_source_sha256``) its
+      ``source_gguf.sha256`` must match that pin too.
+    - any other ``base_scheme`` (fp16): ``base_dir`` must NOT contain a
+      ``dequant_manifest.json`` -- an fp16-scheme run pointed at a dequant
+      output dir is exactly the same silent-confound risk in the other
+      direction.
+
+    Not run for ``--smoke`` (see ``train()``): smoke mode never loads
+    run_config.json, so there is no ``base_scheme`` this gate could check
+    against in the first place.
+    """
+    manifest_path = base_dir / "dequant_manifest.json"
+    manifest_present = manifest_path.is_file()
+
+    if base_scheme == "dequant_q4km":
+        if not manifest_present:
+            _fatal(
+                f"run_config base_scheme={base_scheme!r} but {manifest_path} was not found -- "
+                "--base does not look like a dequant output dir."
+            )
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            _fatal(f"{manifest_path}: invalid JSON ({exc}) -- cannot verify base_scheme before training.")
+        if not isinstance(manifest, dict):
+            _fatal(f"{manifest_path}: does not decode to a JSON object -- cannot verify base_scheme before training.")
+        manifest_scheme = manifest.get("base_scheme")
+        if manifest_scheme != base_scheme:
+            _fatal(
+                f"{manifest_path} base_scheme={manifest_scheme!r} != run_config base_scheme="
+                f"{base_scheme!r} -- refusing to train against a mismatched --base."
+            )
+        if base_source_sha256 is not None:
+            source_gguf = manifest.get("source_gguf")
+            manifest_sha = source_gguf.get("sha256") if isinstance(source_gguf, dict) else None
+            if manifest_sha != base_source_sha256:
+                _fatal(
+                    f"{manifest_path} source_gguf.sha256={manifest_sha!r} != run_config "
+                    f"base_source_sha256={base_source_sha256!r} -- refusing to train against a "
+                    "mismatched --base."
+                )
+    else:
+        if manifest_present:
+            _fatal(
+                f"run_config base_scheme={base_scheme!r} but {manifest_path} exists -- --base looks "
+                "like a dequant output dir, not the fp16 revision this run_config claims."
+            )
+
+
 def _load_dataset_rows(dataset_path: Path) -> list:
     with dataset_path.open("r", encoding="utf-8") as fh:
         return [json.loads(line) for line in fh if line.strip()]
@@ -140,14 +219,54 @@ def _extract_weights(rows: list):
 
 
 def _append_manifest(manifest_path: Path, entry: dict) -> None:
+    """Record one seed's entry into run_manifest.json's ``seeds`` list.
+
+    Despite the name, this REPLACES an existing same-``"seed"`` entry
+    rather than appending a duplicate (review fix #8, round 3):
+    run_manifest.json is a CURRENT-STATE record, and the legitimate
+    lost-gguf retrain path (re-running the same seed after its conversion/
+    artifact-sha step was lost to a crash -- see run_remote_train.sh's
+    resume-predicate fix) must not leave two ``"seed": N`` entries for
+    downstream readers (``check_same_base_scheme``'s manifest scan, the
+    .sh's skip-check) to guess between.
+
+    Other review fixes (2026-07-30):
+    - An existing manifest that fails to parse, OR parses to valid JSON of
+      the WRONG SHAPE (not an object, or a ``"seeds"`` that isn't a list --
+      round 3 fix #8), hard-exits(2) instead of being silently reset to
+      ``{"seeds": []}`` or crashing with a bare ``AttributeError`` -- a
+      silent reset would erase every already-recorded seed's resume
+      history, exactly the §6 crash-resume contract this file's docstring
+      says it protects.
+    - Published atomically (tmp sibling + ``os.replace``, the house idiom
+      also used by ``build_dataset.write_dataset`` and
+      ``icepick/batcher/state.py``): a crash mid-write must never leave a
+      truncated/corrupt run_manifest.json for the .sh's skip-check to trip
+      over on the next resume.
+    """
     manifest = {"seeds": []}
     if manifest_path.exists():
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            manifest = {"seeds": []}
-    manifest.setdefault("seeds", []).append(entry)
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        except json.JSONDecodeError as exc:
+            _fatal(
+                f"{manifest_path}: invalid JSON ({exc}) -- refusing to silently reset it "
+                "(that would erase every already-recorded seed's resume history). Repair "
+                "or move it aside by hand first."
+            )
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("seeds", []), list):
+            _fatal(
+                f"{manifest_path}: valid JSON but the wrong shape (must be a JSON object "
+                "with a 'seeds' list, if present) -- refusing to silently reset it (that "
+                "would erase every already-recorded seed's resume history). Repair or move "
+                "it aside by hand first."
+            )
+    seeds = manifest.setdefault("seeds", [])
+    seeds[:] = [s for s in seeds if not (isinstance(s, dict) and s.get("seed") == entry.get("seed"))]
+    seeds.append(entry)
+    tmp_path = manifest_path.with_name(manifest_path.name + ".tmp")
+    tmp_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    os.replace(tmp_path, manifest_path)
 
 
 def _weighted_sft_trainer_cls(SFTTrainer, torch):
@@ -229,13 +348,22 @@ def train(args) -> None:
     if args.smoke:
         rows = _smoke_examples()
         hyperparams = dict(_SMOKE_HYPERPARAMS)
+        run_config_data = {}
         seed = args.seed if args.seed is not None else 0
     else:
         dataset_path = Path(args.dataset)
         _verify_dataset_receipt(dataset_path)  # hard-exits(2) before any heavy import
-        hyperparams = json.loads(Path(args.run_config).read_text(encoding="utf-8"))["hyperparams"]
+        run_config_data = json.loads(Path(args.run_config).read_text(encoding="utf-8"))
+        hyperparams = run_config_data["hyperparams"]
         seed = args.seed
         rows = _load_dataset_rows(dataset_path)
+        # Review fix #5: verify --base actually looks like what run_config
+        # claims it is, BEFORE any heavy import or training starts.
+        _verify_base_dir_matches_scheme(
+            Path(args.base),
+            run_config_data.get("base_scheme", "fp16_hf_revision"),
+            run_config_data.get("base_source_sha256"),
+        )
 
     # Heavy imports deferred to here (main-guarded code) -- this file parses
     # and reads cleanly with only the stdlib, and never pays the import cost
@@ -323,7 +451,7 @@ def train(args) -> None:
     train_result = trainer.train()
     trainer.save_model(args.out)
 
-    _append_manifest(Path(args.out).parent / "run_manifest.json", {
+    manifest_entry = {
         "seed": seed,
         "adapter_dir": str(args.out),
         "train_loss_final": getattr(train_result, "training_loss", None),
@@ -338,7 +466,31 @@ def train(args) -> None:
         "lr_scheduler_type": lr_scheduler_type,
         "warmup_ratio": warmup_ratio,
         "weight_decay": weight_decay,
-    })
+    }
+    if args.smoke:
+        # Review fix #6: a smoke run never loads run_config.json, so it has
+        # no REAL base_scheme to report -- fabricating one (the fp16
+        # fallback default) poisoned check_same_base_scheme's manifest scan,
+        # because the RUNBOOK §4 smoke config's --out lands in the SAME
+        # out/run_manifest.json a real campaign appends to (smoke_adapter
+        # would become "seeds[0]" with an invented scheme). Marking the
+        # entry "smoke": True instead lets
+        # verify_base_identity._extract_base_scheme skip it outright.
+        manifest_entry["smoke"] = True
+    else:
+        # Base-scheme provenance (T4, 2026-07-30): echoed straight through
+        # from run_config.json -- upload_guard.write_run_config is the
+        # single place that resolves these from config.BASE_SCHEME, this
+        # script never imports loratrain.config (stays a plain
+        # stdlib-parseable file, same reason the four SFTConfig knobs above
+        # are hardcoded fallbacks rather than a config import). A
+        # run_config.json predating this field falls back to the fp16
+        # scheme label with an unknown source pin, exactly like those knobs
+        # fall back to what v1 actually ran.
+        manifest_entry["base_scheme"] = run_config_data.get("base_scheme", "fp16_hf_revision")
+        manifest_entry["base_source_sha256"] = run_config_data.get("base_source_sha256")
+
+    _append_manifest(Path(args.out).parent / "run_manifest.json", manifest_entry)
 
 
 def parse_args(argv=None):

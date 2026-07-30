@@ -300,3 +300,8 @@ bind from day one and "train before baseline" is structurally hard.
   evalharness lane; loratrain's own pin covers the consumer side meanwhile.
 - Hyperparameter defaults in `config.py` (r=16, α=32, lr=1e-4, 3 epochs,
   bf16, seed 20260722) are conventional starting points, not tuned — W3 review.
+- **Dequantized-base training variant (DRAFT, never executed):** RUNBOOK §3-ALT
+  documents training directly on a dequantized copy of the exact serving GGUF
+  (via a new `gguf_to_hf` tool) instead of the D-R2 FP16 revision, closing the
+  same-arch/different-weights residual risk by construction — gated on Nicky's
+  release, blocking parity gate (`verify_dequant_parity`) before any use.

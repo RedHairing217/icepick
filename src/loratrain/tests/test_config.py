@@ -126,3 +126,32 @@ def test_path_roots_sane():
     assert config.SUBREPO_ROOT.name == "loratrain"
     assert config.REPO_ROOT == config.SUBREPO_ROOT.parents[1]
     assert (config.REPO_ROOT / "src" / "loratrain") == config.SUBREPO_ROOT
+
+
+# --- Base-scheme provenance (T4, 2026-07-30) ---------------------------------
+
+
+def test_base_scheme_shipped_default_is_fp16():
+    # Shipped default = current behavior; flipping it is the operator's
+    # decision (see the block comment above BASE_SCHEME), not something
+    # this revision changes unilaterally.
+    assert config.BASE_SCHEME == config.BASE_SCHEME_FP16
+    assert config.BASE_SCHEME_FP16 == "fp16_hf_revision"
+    assert config.BASE_SCHEME_DEQUANT == "dequant_q4km"
+
+
+def test_base_scheme_rejected_when_unknown(monkeypatch):
+    monkeypatch.setattr(config, "BASE_SCHEME", "not_a_real_scheme")
+    with pytest.raises(config.ConfigError) as excinfo:
+        config.validate_config()
+    assert "BASE_SCHEME" in str(excinfo.value)
+
+
+def test_base_scheme_dequant_validates_cleanly(monkeypatch):
+    monkeypatch.setattr(config, "BASE_SCHEME", config.BASE_SCHEME_DEQUANT)
+    config.validate_config()  # must not raise
+
+
+def test_expected_dequant_tensor_total_shape():
+    assert isinstance(config.EXPECTED_DEQUANT_TENSOR_TOTAL, int)
+    assert config.EXPECTED_DEQUANT_TENSOR_TOTAL == 399

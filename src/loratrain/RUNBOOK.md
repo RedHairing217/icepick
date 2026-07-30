@@ -247,12 +247,26 @@ acceptable** — it would force QLoRA's second quantization, escalate instead).
 Template: **RunPod PyTorch 2.x (CUDA 12)** (names drift; any recent official PyTorch
 template). Container disk **≥ 60 GB** (16 GB weights + venv + checkpoints +
 llama.cpp). No network volume needed — the pod is disposable by design.
+**Observed 2026-07-30:** `list-templates` returned 0 items via MCP and every
+official template id 404'd (incl. the one the MCP tool's own docs name) — the
+v2-campaign pod was deployed from an **IMAGE** instead
+(`runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`), same software, no template
+record. If templates 404 again, deploy from the equivalent image and note it;
+worth checking separately whether the connected RunPod credential lacks
+template-read scope.
 
 1.2 Expose **TCP 22 ONLY** (direct TCP; requires a public-IP host — select one),
 attach your SSH public key, deploy. **Do NOT expose TCP 8000 or any other port**
 (SSH-tunnel-only, D-R1 revised 2026-07-25): the status endpoint binds the
 container's loopback and rides the §6 tunnel. From the pod's Connect panel read:
 public IP, external port→22 — that is everything this runbook needs.
+**Attaching the SSH public key (`PUBLIC_KEY`) is not optional and MUST happen
+at pod create, not after** (observed 2026-07-30: fixing it post-create cost a
+restart AND an external-port reassignment). **RunPod reassigns the external
+SSH port on every container recreate** — observed drift 22117 → 22145 → 22174
+across a single restart in the 2026-07-30 round; any stop/start invalidates
+whatever value is currently in `config.py`, re-read it from the Connect panel
+every time.
 
 1.3 **Set the pod variables** — edit `config.py`'s operator block (Appendix A
 applied 2026-07-25): `TRAIN_SERVER_IP = "<pod IP>"` and
@@ -273,12 +287,23 @@ podssh 'nvidia-smi --query-gpu=name,memory.total --format=csv,noheader'   # expe
 ```bash
 podssh 'mkdir -p /workspace/run/status /workspace/run/out'
 scp -P "$TRAIN_SSH_PORT" remote/train_qwen3_lora.py remote/run_remote_train.sh root@"$TRAIN_IP":/workspace/run/
-podssh 'cd /workspace && python -m venv venv && . venv/bin/activate && \
+podssh 'cd /workspace && python -m venv --system-site-packages venv && . venv/bin/activate && \
   pip install -q "transformers==5.14.1" "peft==0.19.1" "trl==0.29.1" accelerate datasets gguf && \
   git clone --branch b10107 --depth 1 https://github.com/ggml-org/llama.cpp && \
   python -c "import torch, transformers, peft, trl; print(torch.__version__, torch.cuda.is_available())" && \
   pip freeze > /workspace/run/pip_freeze.txt'
 ```
+**`--system-site-packages` is load-bearing (amended 2026-07-30, defect 1 of the v2
+campaign):** a plain `python -m venv venv` does not inherit the image's torch, so
+pip resolves its own `torch` build against the wrong CUDA — the observed run
+resolved `torch 2.13.0+cu130` against the pod's 12.8 driver → `cuda False`,
+which would have trained (or crashed) on CPU *after* the dataset had already
+shipped. `--system-site-packages` inherits the image's own `torch`
+(`2.8.0+cu128`, `cuda True` on the A40), which is what this section's "torch =
+template's" note below already intended. Verify with the `torch.__version__,
+torch.cuda.is_available()` print in the same command — it MUST print `True`
+before proceeding to §3.
+
 Stack decision: **plain TRL `SFTTrainer` + peft, bf16 LoRA (no QLoRA)** — 48 GB fits
 Qwen3-8B in bf16 with LoRA + grad-checkpointing comfortably, and skipping QLoRA
 avoids training against an NF4 base while serving against a Q4_K_M base (a second,
@@ -299,6 +324,169 @@ Compare the two shas against `data/identity_receipt.json` (§0.3). **Mismatch �
 repo moved under the pin → STOP, escalate** (do not "just take main"). No HF token
 needed (ungated); if HF ever rate-limits, pass a token via env var from a path-proxy
 file — never inline.
+
+## §3-ALT Dequantized Q4_K_M training base (DRAFT — NEVER EXECUTED)
+
+**Status: DRAFT.** This variant has **never been trained with or executed** on any
+box. It requires **Nicky's release** before any run uses it, and its parity gate
+(below) is **BLOCKING** before any training run trains against — or is compared
+against — a dequant base. Everything in this section is a recipe, not a completed
+step; it does not supersede §3, which remains the executed FP16 recipe.
+
+**Why:** §3 trains on `Qwen/Qwen3-8B` FP16 and D-R2's structural preflight argues,
+but cannot cryptographically prove, that the serving GGUF was quantized from that
+same FP16 (same-arch/same-tokenizer lookalikes are the stated residual risk). This
+variant closes that gap by construction instead: dequantize the exact GGUF file
+`llama-server` serves back to fp32, and train on *that* — so the LoRA base and the
+deployment base are bit-for-bit the same weights, not merely structurally
+equivalent ones.
+
+**New tool** (lands in the same commit set as this doc update):
+`src/loratrain/src/loratrain/gguf_to_hf.py`. CLI (verbatim):
+```
+PYTHONPATH=src python3 -m loratrain.gguf_to_hf --gguf <path> --out <dir> \
+  [--sidecar-dir <dir>] [--expected-sha256 <hex>] [--shard-max-bytes N] \
+  [--gguf-py-dir <dir>] [--plan] [--skip-source-hash]
+```
+It dequantizes the pinned deployment GGUF into an fp32 HF-format directory (weights
++ config/tokenizer sidecars) plus a `dequant_manifest.json` provenance record, so
+the LoRA base = the exact weights llama.cpp serves.
+
+**Recipe (draft):**
+
+1. **Ship the `gguf_to_hf` tool code to the box** — plain `scp`, the same
+   mechanism §2 already uses for `remote/train_qwen3_lora.py` /
+   `remote/run_remote_train.sh` (Non-negotiable 2: "Code files ... may ship
+   plain"). **This is tool code, not data** — §5's statement that the ONE
+   permitted upload is `data/sft_train.jsonl` (through `upload_guard`) stays
+   true unchanged: `gguf_to_hf.py` ships as a manual `scp` of code, exactly like
+   `remote/*.py` does today, never through the guard.
+
+   `gguf_to_hf` is invoked as a package module
+   (`python3 -m loratrain.gguf_to_hf`), so the whole `src/loratrain` package
+   tree — not just the one file — has to land on the box in a `src/loratrain/...`
+   layout for `PYTHONPATH=src` to resolve it, mirroring the layout
+   `cd .../icepick/src/loratrain && PYTHONPATH=src python3 -m loratrain.<module>`
+   already assumes locally (§0.2/§0.3):
+   ```bash
+   podssh 'mkdir -p /workspace/run/loratrain/src'
+   scp -r -P "$TRAIN_SSH_PORT" src/loratrain/src/loratrain \
+     root@"$TRAIN_IP":/workspace/run/loratrain/src/
+   ```
+   This lands the package at `/workspace/run/loratrain/src/loratrain/*.py`.
+   **Step 4 below assumes `cd /workspace/run/loratrain` as its working
+   directory** — that is what makes its bare `PYTHONPATH=src` resolve to the
+   package just shipped here.
+
+2. Fetch the PINNED GGUF repo **on the box** — never upload it from the Mac. Same
+   pins as D-R2 (`verify_base_identity.py`'s `GGUF_REPO` / `GGUF_REPO_REVISION` /
+   `EXPECTED_BASE_GGUF_SHA256`):
+
+   | artifact | pin |
+   |---|---|
+   | GGUF repo | `lmstudio-community/Qwen3-8B-GGUF` @ `07ebe812301319d9947477e3a94ab8aa587bb3af` |
+   | GGUF file | `Qwen3-8B-Q4_K_M.gguf`, sha256 `a7676d257b10f3ce23aedba45e64ba61a5aa295f0009d87c5627f6c026a8f35f` |
+   | FP16 sidecar source | `Qwen/Qwen3-8B` @ `b968826d9c46dd6066d109eabc6255188de91218` (config/tokenizer only — reuse §3's already-fetched fp16 snapshot, don't re-fetch) |
+
+   ```bash
+   podssh '. /workspace/venv/bin/activate && \
+     huggingface-cli download lmstudio-community/Qwen3-8B-GGUF Qwen3-8B-Q4_K_M.gguf \
+       --revision 07ebe812301319d9947477e3a94ab8aa587bb3af \
+       --local-dir /workspace/gguf_fetch'
+   ```
+
+3. **sha256-verify the downloaded file against the pin BEFORE use** (same D-R2
+   discipline as §3's config/tokenizer shas) — mismatch → STOP, escalate, do not
+   "just take what downloaded":
+   ```bash
+   podssh 'sha256sum /workspace/gguf_fetch/Qwen3-8B-Q4_K_M.gguf'
+   # MUST equal a7676d257b10f3ce23aedba45e64ba61a5aa295f0009d87c5627f6c026a8f35f
+   ```
+
+4. Run `gguf_to_hf` **on the box, from `/workspace/run/loratrain`** (the
+   directory step 1 populated — this is what makes the bare `PYTHONPATH=src`
+   below resolve `loratrain.gguf_to_hf`) — `--gguf-py-dir` pointed at the box's
+   pinned llama.cpp clone (§2, release b10107) and `--sidecar-dir` pointed at
+   the already-fetched §3 fp16 snapshot (`/workspace/qwen3-8b-fp16`) for
+   config/tokenizer sidecars:
+   ```bash
+   podssh 'cd /workspace/run/loratrain && . /workspace/venv/bin/activate && \
+     PYTHONPATH=src python3 -m loratrain.gguf_to_hf \
+       --gguf /workspace/gguf_fetch/Qwen3-8B-Q4_K_M.gguf \
+       --out /workspace/qwen3-8b-dequant \
+       --sidecar-dir /workspace/qwen3-8b-fp16 \
+       --expected-sha256 a7676d257b10f3ce23aedba45e64ba61a5aa295f0009d87c5627f6c026a8f35f \
+       --gguf-py-dir /workspace/llama.cpp/gguf-py'
+   ```
+
+5. Train with `--base /workspace/qwen3-8b-dequant` in place of §3's fp16 dir. §4's
+   smoke gate, §5's guarded upload, and §6's seed loop are otherwise unchanged —
+   only the base directory differs.
+
+**Key property:** the base weights are fetched and dequantized **on the box**,
+**never uploaded from the Mac**. `upload_guard`'s checksum allowlist (§5) is
+untouched by this variant — the ONE permitted upload remains `data/sft_train.jsonl`.
+This variant adds a fetch (weights) and a code shipment (step 1), not an upload.
+
+**Identity / provenance (lands in the same commit set as this doc update — the
+tools below already exist; it is the RECIPE above that remains unexecuted):**
+- `python3 -m loratrain.verify_base_identity --dequant-dir <dir>` — a hash-chain
+  receipt over the dequant output: per-file re-hash of the HF-format shards, a
+  directory-completeness check, and a re-hash of the source GGUF on disk against
+  the D-R2 pin, chained into one receipt.
+- `config.BASE_SCHEME` knob (default `fp16_hf_revision` — today's §3 recipe;
+  this variant runs with it set to `dequant_q4km`). `run_config.json` /
+  `run_manifest.json` record `base_scheme` + `base_source_sha256` for every run.
+  **Runs of different `base_scheme` values are not comparable** (fp16-base vs
+  dequant-base LoRAs are two different experiments) — a `--compare-runs`
+  tripwire refuses a silent cross-scheme comparison, and a trainer-side gate
+  refuses to start if the `--base` directory is inconsistent with the run's
+  configured `base_scheme`.
+
+**Parity gate (post-dequant, pre-training) — BLOCKING:** run this after building
+the dequant directory (step 4 above) and before any training run consumes it —
+it is a check on the dequantized base weights themselves, performed before
+training starts, not a check performed after training:
+```
+PYTHONPATH=src python3 -m loratrain.verify_dequant_parity --dequant-dir <hf dir> \
+  --server-url http://127.0.0.1:<port>/v1/chat/completions \
+  --from-eval-set <eval_set.jsonl> --expected-alias qwen3-8b-q4km-base \
+  [--mode raw|chat|both] [--max-new-tokens 2048] [--report <path>]
+```
+**The default mode IS the gate.** `--mode` defaults to `raw`: it drives the
+server's native `/completion` endpoint directly (no server-side chat/reasoning
+parsing) and renders the chat template tool-side itself, so the comparison is
+byte-exact — the only channel where token-for-token equality is meaningful (an
+adversarial review found `/v1/chat/completions` structurally lossy for this
+purpose: llama-server's reasoning parser drops the empty `<think>` block and
+consumes whitespace, so byte-exact comparison through the chat endpoint is
+impossible). `chat` mode is an **informational production-wire cross-check
+only** — it NEVER affects the exit code; a chat-only (`--mode chat`) run is not
+the gate and does not satisfy it. `raw` alone is sufficient to gate; `both` runs
+raw (gating) plus chat (informational) in one pass.
+**Recommended:** pass `--expected-alias qwen3-8b-q4km-base` (§0.4's base alias,
+shown above) so the tool hard-fails if the server's reported model alias doesn't
+match — protects against silently comparing against a wrong or adapter-carrying
+server. (`--device` is also available, for the HF-side compute device, if the
+default doesn't suit the box.)
+**Exit codes:** `0` = all 10 raw comparisons match (gate PASSES); `1` = any raw
+mismatch (gate FAILS — do not train against this dequant dir); `2` = anything
+else (infra failure, Qwen-slot guard refusal, precondition failure — inconclusive,
+not a pass).
+Serve command for the gate — **base, NO `--lora`** (same flag discipline as
+§0.4-EXECUTED's canonical serve command: `-c 8192 -ngl 99 --parallel 1` pinned so
+the gate's own inference matches how the adapter will later be served):
+```bash
+llama-server -m <pinned gguf> -c 8192 -ngl 99 --parallel 1 --port <port>
+```
+**Hard rule: NEVER run this while an eval owns the Qwen slot** (machine-wide
+one-concurrent-Qwen-call invariant) — the tool refuses to start if eval processes
+are live; `--i-own-the-qwen-slot` overrides the refusal for an operator who has
+independently confirmed the slot is actually free.
+
+**This variant has NEVER been trained with or executed.** Do not run any step
+above without Nicky's explicit release, and do not let a training run consume the
+dequant base without the parity gate having PASSED first.
 
 ## §4 Smoke test — prove Path A before any real data ships (D-R3; ~10 min, ~$0.08)
 
@@ -323,6 +511,31 @@ curl -s localhost:8081/v1/chat/completions -d '{"model":"smoke-lora","temperatur
 target) + a neutral prompt ("What is 2+2?") still answers sanely. **FAIL** = STOP,
 teardown (§9), escalate — Path A is dead and W4 must be re-decided by Nicky. Never
 merge+re-quantize as a workaround.
+
+**Known discrepancy (found 2026-07-30, defect 2 of the v2 campaign; NOT yet fixed
+in code — document + recommend, do not silently work around):** `_SMOKE_HYPERPARAMS`
+(epochs=4 on 8 examples = 4 optimizer steps) cannot satisfy its own PASS clause —
+the observed run reached train_loss 4.58, the adapter loaded and measurably shifted
+output, but never emitted the required `BANANA`, so a correctly-working pipeline
+reads as FAIL under the criterion as written. **Probe-proven criterion** (throwaway
+40-epoch run on a COPY of the smoke config — the canonical trainer file was left
+byte-identical, sha `05eee7a1…`): loss **0.078**, trigger output **contains
+`'BANANA'`**, neutrals sane (`'4'`, `'2+2?'` → `'4'`; `'Pacific'` for a
+capital-of-a-real-country probe), adapter registered on `llama-server` at scale
+1.0. Until the code is fixed, treat a §4 run that (a) loads cleanly, (b) measurably
+shifts output vs base, and (c) keeps neutrals sane as PASS-if-loss-is-low
+(compare against the 0.078 probe figure) even if the literal "contains BANANA"
+clause fails at epochs=4 — and flag it for the code fix below rather than
+escalating as a Path-A failure.
+**Recommended code-side fix (needs Nicky's release before landing):** either raise
+`_SMOKE_HYPERPARAMS` epochs (40 is probe-proven; something lower may also clear the
+threshold — unmeasured) or drop the "contains the dummy target" clause from the
+PASS criterion in favor of a loss-threshold + neutrals-sane check. This runbook
+does not change code — flagging only.
+**Related code fix (same window):** smoke runs now stamp their manifest entry
+with `"smoke": true` and no `base_scheme`, so a §4 run no longer silently writes
+an fp16-scheme default into the same `run_manifest.json` the campaign's real
+seeds append to.
 
 ## §5 Upload the dataset — the ONE permitted upload, guarded
 
@@ -378,18 +591,40 @@ r=16 α=32 dropout=0.05 lr=1e-4 3 epochs, target modules
 q/k/v/o/gate/up/down_proj, grad-checkpointing, packing OFF — one verbatim trace
 per example, `max_seq_len` 4096) → PEFT adapter `out/adapter_seed<N>/` →
 `convert_lora_to_gguf.py` → `out/adapter_seed<N>.gguf` → shas + metrics into
-`status/` and `run_manifest.json`. Crash mid-run? Re-launch the same command —
+`status/` and `out/run_manifest.json`. Crash mid-run? Re-launch the same command —
 completed seeds are detected by their manifest entries and skipped (and the
 status server is PID-guarded, so a re-run never double-spawns it).
+
+**Manifest-path defect (found 2026-07-30 v2 campaign, defect 3 — FIXED in code
+this window):** `run_remote_train.sh` previously read/wrote the manifest at
+`$RUN_DIR/run_manifest.json` while the trainer actually wrote
+`$RUN_DIR/out/run_manifest.json`, so `status.json`'s `completed_seeds` stayed `[]`
+for the whole run and the crash-resume contract above was silently broken (a
+re-launch after a mid-run crash would have retrained all 12 seeds instead of
+skipping completed ones). Didn't bite in the 07-30 round (no crash occurred) but
+was live for the next one. `run_remote_train.sh` now follows the trainer's actual
+path (`out/run_manifest.json`), so the skip-completed-seeds behavior described
+above is trustworthy again.
 
 ## §7 Retrieve & verify (the ONLY egress)
 
 ```bash
 scp -P "$TRAIN_SSH_PORT" 'root@'"$TRAIN_IP"':/workspace/run/out/adapter_seed*.gguf' \
-  'root@'"$TRAIN_IP"':/workspace/run/run_manifest.json' \
+  'root@'"$TRAIN_IP"':/workspace/run/out/run_manifest.json' \
+  'root@'"$TRAIN_IP"':/workspace/run/status/artifact_shas.txt' \
   'root@'"$TRAIN_IP"':/workspace/run/pip_freeze.txt' data/
-shasum -a 256 data/adapter_seed*.gguf   # MUST equal the shas in run_manifest.json / status.json
+shasum -a 256 data/adapter_seed*.gguf   # MUST equal the shas in data/artifact_shas.txt
 ```
+**Verification-target correction (found 2026-07-30 v2 campaign, defect 4):**
+this step previously said the adapter shas "MUST equal the shas in
+`run_manifest.json`/`status.json`" — neither file carries shas. The shas actually
+live in **`status/artifact_shas.txt`**, which is what the 07-30 round verified
+against (12/12 confirmed) and what the `scp`/`shasum` lines above now target.
+**Manifest scp-path correction (adversarial review, same session):** the scp line
+above also named the wrong box path for the manifest itself —
+`/workspace/run/run_manifest.json`, which the trainer has never written. Per the
+defect-3 fix in §6, the manifest lives at `/workspace/run/out/run_manifest.json`;
+the scp line now pulls from there.
 ~30–60 MB per adapter. PEFT dirs stay on the box (the GGUF is the serving artifact;
 pull `out/adapter_seed*/` too only if Nicky wants the raw PEFT copies archived).
 Nothing else leaves the box; the box never held anything but code, base weights,
@@ -412,7 +647,14 @@ final charge; record actual $ + wall-clock in `run_manifest.json`'s local copy.
 pod?"** Reset `config.py` `TRAIN_SERVER_IP` to the `127.0.0.1` placeholder and
 `TRAIN_SERVER_SSH_PORT` to `22` / unset `TRAIN_SSH_PORT` (the pod's address is
 dead; a stale IP invites accidental reuse). `TRAIN_SERVER_PORT` needs no reset —
-it is the M4-local tunnel port, not pod state.
+it is the M4-local tunnel port, not pod state. **Commit the reset in the same
+session (found 2026-07-30, defect 5) — do not just make it in the working
+tree.** A prior round's §9 reset was made locally but never committed, so the
+terminated pod's address (`69.30.85.138:22092`, dead since 2026-07-27) lingered
+on `HEAD` until the next session caught and committed it. RunPod reassigns IPs
+on every new pod, so a stale committed address isn't just clutter — it's an
+scp-to-a-stranger hazard if a future session trusts it uncritically. Make the
+edit, then `git commit` it before ending the session, every time.
 
 ## §10 Handoff to eval — local M4 only
 

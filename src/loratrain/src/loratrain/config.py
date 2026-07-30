@@ -86,6 +86,41 @@ SERVE_QUANT = "GGUF-Q4_K_M"  # pinned 2026-07-22 (README D3: baseline scored for
 ADAPTER_FORMAT = "peft"  # pinned 2026-07-22 (README D1: binding contract is on the artifact, not the remote stack)
 
 # ============================================================================
+# Base-scheme provenance (T4, 2026-07-30). The LoRA base can be obtained two
+# ways: the pinned upstream fp16 HF revision (verify_base_identity.FP16_REVISION,
+# the original W1/W2 path), or by dequantizing the pinned deployment GGUF
+# (gguf_to_hf.py's output, identity-checked by
+# verify_base_identity.check_dequant_manifest / --dequant-dir). Both name the
+# SAME underlying weights; they are not interchangeable in a training run's
+# provenance because the dequant path recovers them through Q4_K_M rounding
+# rather than reading the fp16 tensors directly.
+#
+# BASE_SCHEME is OPERATOR-EDITABLE, mirroring the WEIGHT_POLICY knob above:
+# BASE_SCHEME_FP16 is the shipped default (current behavior, unchanged by
+# this revision) -- flipping it to BASE_SCHEME_DEQUANT is the operator's
+# decision, gated on gguf_to_hf.py's output passing its own identity
+# preflight, not something this revision does unilaterally.
+#
+# Runs built under the two schemes must NEVER be silently compared (their
+# base weights are recovered through different paths): upload_guard's
+# preflight refuses when the identity receipt's scheme disagrees with
+# BASE_SCHEME (upload_guard.check_base_scheme), and
+# verify_base_identity.check_same_base_scheme / --compare-runs is the
+# post-hoc tripwire for comparing two already-trained runs.
+# ============================================================================
+
+BASE_SCHEME_FP16 = "fp16_hf_revision"
+BASE_SCHEME_DEQUANT = "dequant_q4km"
+BASE_SCHEME = BASE_SCHEME_FP16  # <-- EDIT HERE to flip: operator decision (see block comment above), not a default this revision changes
+VALID_BASE_SCHEMES = (BASE_SCHEME_FP16, BASE_SCHEME_DEQUANT)
+
+# Expected `tensor_census.total` in gguf_to_hf.py's dequant_manifest.json for
+# the pinned Qwen3-8B base -- checked by
+# verify_base_identity.check_dequant_manifest (T3). Pinned per the tool's own
+# manifest contract, not re-derived here.
+EXPECTED_DEQUANT_TENSOR_TOTAL = 399
+
+# ============================================================================
 # GGUF 7/8 backfill roster (Nicky's ruling 2026-07-26). The split keeps a
 # 200-uid train set by backfilling the 7-record shortfall the 2026-07-16
 # repair-lane fold left (band_corpus 309 -> 293) from the GGUF 7/8 rescore
@@ -383,6 +418,11 @@ def validate_config() -> None:
     if WEIGHT_POLICY not in VALID_WEIGHT_POLICIES:
         problems.append(
             f"WEIGHT_POLICY must be one of {VALID_WEIGHT_POLICIES} (got {WEIGHT_POLICY!r})"
+        )
+
+    if BASE_SCHEME not in VALID_BASE_SCHEMES:
+        problems.append(
+            f"BASE_SCHEME must be one of {VALID_BASE_SCHEMES} (got {BASE_SCHEME!r})"
         )
 
     if (

@@ -199,11 +199,29 @@ def validate_dataset() -> dict:
     return {"sha256": build_dataset.sha256_file(dataset_path), "rows": len(rows)}
 
 
-def write_run_config(path) -> None:
+def write_run_config(path, identity_receipt: dict = None) -> None:
     """Write ``run_config.json``: every hyperparameter/seed/pin read live from config.
 
     The box never hardcodes a parameter -- this is the one file that
     carries them across the wire.
+
+    ``identity_receipt`` is the ALREADY-PARSED section 0.3 identity receipt
+    (``main`` has read it by the time this is called, to check its
+    verdict) -- passed through here so a ``dequant`` scheme run can carry
+    its ``base_manifest_sha256`` chain link without a second file read.
+    ``None`` is accepted (and is the right value under the fp16 scheme,
+    which never has a manifest-sha to echo) -- every existing call
+    site/test that only exercises the fp16 path keeps working unchanged.
+
+    NOTE on ``base_source_sha256``'s shape (adjudicated report-only, review
+    2026-07-30): it holds a 40-hex git commit sha under the fp16 scheme
+    (``verify_base_identity.FP16_REVISION``) but a 64-hex sha256 under the
+    dequant scheme (``verify_base_identity.EXPECTED_BASE_GGUF_SHA256``) --
+    same field name, two different hash algorithms/lengths depending on
+    ``config.BASE_SCHEME``. Documented here rather than renamed: the field
+    means "the pin identifying this run's base source," and which kind of
+    pin that is follows directly from ``base_scheme`` sitting right next to
+    it in this same payload.
     """
     payload = {
         # Explicit list from config (v2, 2026-07-30). Was
@@ -238,8 +256,117 @@ def write_run_config(path) -> None:
         "adapter_format": config.ADAPTER_FORMAT,
         "llamacpp_tag": verify_base_identity.LLAMACPP_TAG,
         "serve_quant": config.SERVE_QUANT,
+        # Base-scheme provenance (T4, 2026-07-30): which of the two ways
+        # this run's LoRA base was obtained, plus the pin identifying that
+        # source, so runs from the two schemes are never silently
+        # comparable (see verify_base_identity.check_same_base_scheme /
+        # --compare-runs and this module's own preflight chain check,
+        # check_base_scheme, below). ADDITIVE ONLY under the shipped fp16
+        # default -- see test_write_run_config_additive_only_under_default_scheme.
+        "base_scheme": config.BASE_SCHEME,
+        "base_source_sha256": (
+            verify_base_identity.EXPECTED_BASE_GGUF_SHA256
+            if config.BASE_SCHEME == config.BASE_SCHEME_DEQUANT
+            else verify_base_identity.FP16_REVISION
+        ),
     }
+    if config.BASE_SCHEME == config.BASE_SCHEME_DEQUANT:
+        chain = (identity_receipt or {}).get("chain") or {}
+        base_manifest_sha256 = chain.get("dequant_manifest_sha256")
+        if not base_manifest_sha256:
+            # Review fix #8 (fail-open null): a dequant-scheme run_config.json
+            # with no manifest-sha chain link is not a degraded-but-shippable
+            # artifact -- it means the identity receipt this call was handed
+            # either predates the chain (T3) or was hand-edited, and there is
+            # nothing on the other end of check_base_scheme's chain-of-custody
+            # to verify against. Refuse rather than silently emitting a null.
+            raise UploadRefused(
+                "config.BASE_SCHEME is dequant_q4km but the identity receipt carries no "
+                "chain.dequant_manifest_sha256 -- refusing to ship a run_config.json with no "
+                "manifest-sha chain link for a dequant-scheme run. Re-run verify_base_identity "
+                "--dequant-dir first."
+            )
+        payload["base_manifest_sha256"] = base_manifest_sha256
     Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def check_base_scheme(identity_receipt: dict) -> None:
+    """Refuse if the identity receipt's base scheme disagrees with ``config.BASE_SCHEME``.
+
+    A receipt written before this feature existed carries no ``scheme`` key
+    at all -- treated as ``config.BASE_SCHEME_FP16`` for backward
+    compatibility (every receipt before T3/T4 necessarily came from the
+    fp16 structural comparator). This is the upload-time half of the
+    "never silently compare runs from different base schemes" rule (see
+    ``verify_base_identity.check_same_base_scheme`` / ``--compare-runs``
+    for the run-comparison half, applied after the fact to two already-
+    trained runs).
+    """
+    receipt_scheme = identity_receipt.get("scheme", config.BASE_SCHEME_FP16)
+    if receipt_scheme != config.BASE_SCHEME:
+        raise UploadRefused(
+            f"identity receipt scheme {receipt_scheme!r} != config.BASE_SCHEME "
+            f"{config.BASE_SCHEME!r} -- refusing to upload: the identity preflight "
+            "(RUNBOOK section 0.3) was verified against a different base scheme than "
+            "this config is currently set to train against. Runs from the two base "
+            "schemes must never be silently comparable -- re-run verify_base_identity "
+            "for the scheme config.BASE_SCHEME actually names, or flip config.BASE_SCHEME "
+            "to match the receipt you have."
+        )
+
+
+def check_source_verified(identity_receipt: dict) -> None:
+    """Refuse a dequant-scheme upload unless the identity receipt PROVES a
+    verified source-GGUF match (review fix #1, round 4 -- rewritten
+    fail-closed; supersedes review fix #2, round 3, which was a fail-open
+    blocklist).
+
+    The round-3 version enumerated shapes to REFUSE (``source_verified is
+    False``, or absent with a null ``gguf_sha256``) -- a blocklist, which
+    is fail-OPEN by construction: every shape not explicitly listed
+    quietly PASSES. The attack-replay found three that did:
+    ``{"source_verified": True, "gguf_sha256": null}``, ``{"source_verified":
+    "false"}`` (a STRING, not the boolean marker -- `"false" is False` is
+    ``False`` in Python, so the old identity check missed it), and
+    ``{"source_verified": True, "gguf_sha256": "00"*32}`` (a well-formed
+    but WRONG hash -- the round-3 code never compared the receipt's sha
+    against the pin at upload time AT ALL). None of these are
+    cryptographic proof the local GGUF file was hashed and matched --
+    yet none tripped the specific conditions the blocklist checked for.
+
+    Now a WHITELIST: the upload proceeds ONLY when
+    ``chain.source_verified is True`` (identity check -- a truthy
+    non-``bool`` value such as the string ``"true"`` does NOT count) AND
+    ``chain.gguf_sha256 == verify_base_identity.EXPECTED_BASE_GGUF_SHA256``
+    (exact equality against the pin -- not "looks like a sha256", not
+    "matches the manifest's own unverified claim"). Anything else --
+    absent, wrong type, wrong value -- refuses.
+
+    LEGACY-SHAPE HANDLING: there is no backward-compatibility carve-out
+    here, deliberately. Every other pinned-value check in this codebase
+    that tolerates an old shape (e.g. ``check_base_scheme`` treating a
+    receipt with no ``scheme`` key as fp16) does so because that old shape
+    was ACTUALLY SHIPPED and has real artifacts to stay compatible with.
+    The dequant scheme, its receipts, and this chain field have never
+    shipped an upload -- there is nothing legacy to grandfather in, so
+    every non-conforming shape (including one that predates this field
+    entirely) refuses the same way. Only meaningful under
+    ``config.BASE_SCHEME_DEQUANT`` -- callers must gate on that themselves
+    (the fp16 receipt shape has no ``chain.source_verified`` concept at
+    all; see ``main()``).
+    """
+    chain = identity_receipt.get("chain") or {}
+    source_verified = chain.get("source_verified")
+    gguf_sha256 = chain.get("gguf_sha256")
+    if source_verified is True and gguf_sha256 == verify_base_identity.EXPECTED_BASE_GGUF_SHA256:
+        return
+    raise UploadRefused(
+        "identity receipt chain does not prove a verified source-GGUF match -- refusing to "
+        f"upload: chain.source_verified={source_verified!r} (must be exactly True) and "
+        f"chain.gguf_sha256={gguf_sha256!r} (must equal the pinned "
+        f"EXPECTED_BASE_GGUF_SHA256={verify_base_identity.EXPECTED_BASE_GGUF_SHA256!r}). "
+        "Re-run verify_base_identity --dequant-dir WITHOUT --skip-file-sha before uploading."
+    )
 
 
 def write_receipt(path, dataset_info: dict, payload_shas: dict) -> None:
@@ -291,13 +418,16 @@ def main(argv=None) -> int:
                 f"{identity_receipt_path} verdict={identity_receipt.get('verdict')!r} -- "
                 "identity preflight (RUNBOOK section 0.3) has not passed."
             )
+        check_base_scheme(identity_receipt)
+        if config.BASE_SCHEME == config.BASE_SCHEME_DEQUANT:
+            check_source_verified(identity_receipt)
 
         dataset_info = validate_dataset()
 
         config.DATA_DIR.mkdir(parents=True, exist_ok=True)
         run_config_path = config.DATA_DIR / "run_config.json"
         upload_receipt_path = config.DATA_DIR / "upload_receipt.json"
-        write_run_config(run_config_path)
+        write_run_config(run_config_path, identity_receipt)
 
         dataset_path = Path(config.SFT_DATASET_PATH)
         payload_shas = {

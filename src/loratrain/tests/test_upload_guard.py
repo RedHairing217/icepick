@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from loratrain import build_dataset, config, upload_guard
+from loratrain import build_dataset, config, upload_guard, verify_base_identity
 
 
 def _write_jsonl(path, rows):
@@ -337,3 +337,278 @@ def test_manifest_nested_corpus_sha_mismatch_refuses(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "DATASET_MANIFEST_PATH", m)
     with pytest.raises(upload_guard.UploadRefused):
         upload_guard._check_manifest_corpus_sha(m)
+
+
+# --- write_run_config: base-scheme provenance (T4, 2026-07-30) ---------------
+
+
+def test_write_run_config_additive_only_under_default_scheme(tmp_path):
+    # ADDITIVE-ONLY (T4.2): under the shipped default scheme (fp16), the
+    # produced run_config.json must equal exactly the pre-T4 payload shape
+    # plus base_scheme + base_source_sha256 -- nothing removed, renamed, or
+    # (for this scheme) further added.
+    assert config.BASE_SCHEME == config.BASE_SCHEME_FP16  # this test only proves additivity for the shipped default
+
+    path = tmp_path / "run_config.json"
+    upload_guard.write_run_config(path)
+    produced = json.loads(path.read_text(encoding="utf-8"))
+
+    pre_change_payload = {
+        "seeds": list(config.SEEDS),
+        "hyperparams": {
+            "rank": config.LORA_RANK,
+            "alpha": config.LORA_ALPHA,
+            "dropout": config.LORA_DROPOUT,
+            "lr": config.LEARNING_RATE,
+            "epochs": config.EPOCHS,
+            "micro_batch_size": config.MICRO_BATCH_SIZE,
+            "max_seq_len": config.MAX_SEQ_LEN,
+            "grad_accum_steps": config.GRAD_ACCUM_STEPS,
+            "lr_scheduler_type": config.LR_SCHEDULER_TYPE,
+            "warmup_ratio": config.WARMUP_RATIO,
+            "weight_decay": config.WEIGHT_DECAY,
+        },
+        "weight_policy": config.WEIGHT_POLICY,
+        "weight_policy_label": config.weight_policy_label(),
+        "dataset_schema": "prompt_completion.v2",
+        "completion_only_loss": True,
+        "base_model": config.BASE_MODEL_HF_ID,
+        "base_model_revision": verify_base_identity.FP16_REVISION,
+        "adapter_format": config.ADAPTER_FORMAT,
+        "llamacpp_tag": verify_base_identity.LLAMACPP_TAG,
+        "serve_quant": config.SERVE_QUANT,
+    }
+
+    expected = dict(pre_change_payload)
+    expected["base_scheme"] = config.BASE_SCHEME_FP16
+    expected["base_source_sha256"] = verify_base_identity.FP16_REVISION
+
+    assert produced == expected
+    assert set(produced) - set(pre_change_payload) == {"base_scheme", "base_source_sha256"}
+
+
+def test_write_run_config_dequant_scheme_adds_manifest_sha(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "BASE_SCHEME", config.BASE_SCHEME_DEQUANT)
+    path = tmp_path / "run_config.json"
+    receipt = {"verdict": "PASS", "scheme": "dequant_q4km", "chain": {"dequant_manifest_sha256": "ab" * 32}}
+
+    upload_guard.write_run_config(path, receipt)
+    produced = json.loads(path.read_text(encoding="utf-8"))
+
+    assert produced["base_scheme"] == "dequant_q4km"
+    assert produced["base_source_sha256"] == verify_base_identity.EXPECTED_BASE_GGUF_SHA256
+    assert produced["base_manifest_sha256"] == "ab" * 32
+
+
+def test_write_run_config_dequant_scheme_without_receipt_arg_refuses(tmp_path, monkeypatch):
+    # Review fix #8 (fail-open null): this used to emit base_manifest_sha256:
+    # null and proceed. A dequant-scheme run_config.json with no manifest-sha
+    # chain link is not a shippable degraded artifact -- it must refuse.
+    monkeypatch.setattr(config, "BASE_SCHEME", config.BASE_SCHEME_DEQUANT)
+    path = tmp_path / "run_config.json"
+
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.write_run_config(path)  # no identity_receipt passed at all
+    assert not path.exists()
+
+
+def test_write_run_config_dequant_scheme_with_receipt_missing_chain_refuses(tmp_path, monkeypatch):
+    # Same refusal, but with an identity_receipt argument that just lacks
+    # the chain (e.g. a hand-edited/corrupted receipt) rather than being
+    # omitted entirely.
+    monkeypatch.setattr(config, "BASE_SCHEME", config.BASE_SCHEME_DEQUANT)
+    path = tmp_path / "run_config.json"
+    receipt = {"verdict": "PASS", "scheme": "dequant_q4km"}  # no "chain" key at all
+
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.write_run_config(path, receipt)
+    assert not path.exists()
+
+
+def test_write_run_config_dequant_scheme_with_empty_chain_sha_refuses(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "BASE_SCHEME", config.BASE_SCHEME_DEQUANT)
+    path = tmp_path / "run_config.json"
+    receipt = {"verdict": "PASS", "scheme": "dequant_q4km", "chain": {"dequant_manifest_sha256": None}}
+
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.write_run_config(path, receipt)
+    assert not path.exists()
+
+
+def test_write_run_config_fp16_scheme_never_adds_manifest_sha_key(tmp_path):
+    path = tmp_path / "run_config.json"
+    receipt = {"verdict": "PASS", "chain": {"dequant_manifest_sha256": "ab" * 32}}
+
+    upload_guard.write_run_config(path, receipt)
+    produced = json.loads(path.read_text(encoding="utf-8"))
+
+    assert "base_manifest_sha256" not in produced  # fp16 scheme never carries this key at all
+
+
+# --- check_base_scheme: upload-time chain enforcement (T4 #3) ----------------
+
+
+def test_check_base_scheme_receipt_without_scheme_key_is_fp16_ok():
+    assert config.BASE_SCHEME == config.BASE_SCHEME_FP16
+    assert upload_guard.check_base_scheme({"verdict": "PASS"}) is None  # no raise
+
+
+def test_check_base_scheme_matching_explicit_fp16_ok():
+    assert upload_guard.check_base_scheme({"verdict": "PASS", "scheme": "fp16_hf_revision"}) is None
+
+
+def test_check_base_scheme_mismatch_refuses():
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.check_base_scheme({"verdict": "PASS", "scheme": "dequant_q4km"})
+
+
+def test_check_base_scheme_dequant_matching_ok(monkeypatch):
+    monkeypatch.setattr(config, "BASE_SCHEME", config.BASE_SCHEME_DEQUANT)
+    assert upload_guard.check_base_scheme({"verdict": "PASS", "scheme": "dequant_q4km"}) is None
+
+
+def test_check_base_scheme_dequant_config_but_fp16_receipt_refuses(monkeypatch):
+    # Receipt without "scheme" is treated as fp16 -- must still refuse when
+    # config.BASE_SCHEME has been flipped to dequant.
+    monkeypatch.setattr(config, "BASE_SCHEME", config.BASE_SCHEME_DEQUANT)
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.check_base_scheme({"verdict": "PASS"})
+
+
+def test_main_identity_receipt_scheme_mismatch_refuses(env, monkeypatch, capsys):
+    env["identity_receipt_path"].write_text(
+        json.dumps({"verdict": "PASS", "scheme": "dequant_q4km"}), encoding="utf-8"
+    )
+    rc = upload_guard.main([])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "UPLOAD REFUSED" in captured.err
+
+
+def test_main_identity_receipt_no_scheme_key_still_succeeds_under_fp16_default(env):
+    # env's identity_receipt fixture is {"verdict": "PASS"} (no scheme key)
+    # -- backward compat: this must NOT be refused under the shipped fp16
+    # default.
+    rc = upload_guard.main([])
+    assert rc == 0
+
+
+def test_main_dequant_scheme_receipt_without_chain_refuses(env, monkeypatch, capsys):
+    # Review fix #8, exercised end to end through main(): a dequant-scheme
+    # config with a PASS receipt that lacks chain.dequant_manifest_sha256
+    # must refuse before ever calling write_run_config's disk write.
+    monkeypatch.setattr(config, "BASE_SCHEME", config.BASE_SCHEME_DEQUANT)
+    env["identity_receipt_path"].write_text(
+        json.dumps({"verdict": "PASS", "scheme": "dequant_q4km"}), encoding="utf-8"
+    )
+    rc = upload_guard.main([])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "UPLOAD REFUSED" in captured.err
+    assert not (env["data_dir"] / "run_config.json").exists()
+
+
+# --- check_source_verified: fail-closed whitelist (review fix #1, round 4) --
+# Supersedes the round-3 blocklist version -- see the function's own
+# docstring for the three fail-open bypass shapes the attack-replay found.
+
+_REAL_PIN = verify_base_identity.EXPECTED_BASE_GGUF_SHA256
+
+
+def test_check_source_verified_genuine_verified_receipt_proceeds():
+    chain = {"source_verified": True, "gguf_sha256": _REAL_PIN, "dequant_manifest_sha256": "def" * 21}
+    assert upload_guard.check_source_verified({"verdict": "PASS", "scheme": "dequant_q4km", "chain": chain}) is None
+
+
+def test_check_source_verified_bypass_null_sha_refuses():
+    # Bypass shape #1: source_verified True but gguf_sha256 null -- no
+    # value was ever actually compared to the pin.
+    chain = {"source_verified": True, "gguf_sha256": None}
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.check_source_verified({"verdict": "PASS", "scheme": "dequant_q4km", "chain": chain})
+
+
+def test_check_source_verified_bypass_string_false_refuses():
+    # Bypass shape #2: source_verified is the STRING "false", not the
+    # boolean False -- `"false" is False` is False in Python, so the old
+    # blocklist's identity check against False missed this entirely, and
+    # the old code never positively required `is True` either.
+    chain = {"source_verified": "false", "gguf_sha256": _REAL_PIN}
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.check_source_verified({"verdict": "PASS", "scheme": "dequant_q4km", "chain": chain})
+
+
+def test_check_source_verified_bypass_wrong_hash_refuses():
+    # Bypass shape #3: source_verified True, gguf_sha256 well-formed but
+    # WRONG -- the old code never compared it to the pin at all.
+    chain = {"source_verified": True, "gguf_sha256": "00" * 32}
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.check_source_verified({"verdict": "PASS", "scheme": "dequant_q4km", "chain": chain})
+
+
+def test_check_source_verified_explicit_false_refuses():
+    chain = {"source_verified": False, "gguf_sha256": None, "manifest_claimed_gguf_sha256": "abc"}
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.check_source_verified({"verdict": "PASS", "scheme": "dequant_q4km", "chain": chain})
+
+
+def test_check_source_verified_chain_absent_entirely_refuses():
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.check_source_verified({"verdict": "PASS", "scheme": "dequant_q4km"})
+
+
+def test_check_source_verified_legacy_shape_without_source_verified_key_refuses():
+    # Documents the "no legacy carve-out" contract (round 4): a chain that
+    # predates this field entirely -- e.g. only gguf_sha256, no
+    # source_verified key at all, even the CORRECT pin value -- still
+    # refuses. There is no shipped dequant-upload history to grandfather
+    # in, so presence of the right hash alone is not enough; the explicit
+    # source_verified: True marker is mandatory.
+    chain = {"gguf_sha256": _REAL_PIN, "dequant_manifest_sha256": "def" * 21}
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.check_source_verified({"verdict": "PASS", "scheme": "dequant_q4km", "chain": chain})
+
+
+def test_main_dequant_scheme_skip_file_sha_receipt_refuses_upload(env, monkeypatch, capsys):
+    # End to end: a receipt produced by --skip-file-sha (source_verified
+    # False, gguf_sha256 null) must refuse at the upload gate, per the
+    # module's own "the upload gate is where the full chain must hold" rule.
+    monkeypatch.setattr(config, "BASE_SCHEME", config.BASE_SCHEME_DEQUANT)
+    env["identity_receipt_path"].write_text(
+        json.dumps({
+            "verdict": "PASS",
+            "scheme": "dequant_q4km",
+            "chain": {
+                "source_verified": False,
+                "gguf_sha256": None,
+                "manifest_claimed_gguf_sha256": "a" * 64,
+                "dequant_manifest_sha256": "b" * 64,
+            },
+        }),
+        encoding="utf-8",
+    )
+    rc = upload_guard.main([])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "UPLOAD REFUSED" in captured.err
+    assert not (env["data_dir"] / "run_config.json").exists()
+
+
+def test_main_dequant_scheme_verified_receipt_succeeds(env, monkeypatch):
+    monkeypatch.setattr(config, "BASE_SCHEME", config.BASE_SCHEME_DEQUANT)
+    env["identity_receipt_path"].write_text(
+        json.dumps({
+            "verdict": "PASS",
+            "scheme": "dequant_q4km",
+            "chain": {
+                "source_verified": True,
+                "gguf_sha256": _REAL_PIN,
+                "dequant_manifest_sha256": "b" * 64,
+            },
+        }),
+        encoding="utf-8",
+    )
+    rc = upload_guard.main([])
+    assert rc == 0
+    produced = json.loads((env["data_dir"] / "run_config.json").read_text(encoding="utf-8"))
+    assert produced["base_manifest_sha256"] == "b" * 64
