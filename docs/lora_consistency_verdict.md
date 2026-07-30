@@ -196,3 +196,63 @@ Consequence per the decisions doc's own D5 branch: *"If the verdict is null, v2'
 masking fix becomes the leading hypothesis for why"* — that branch is now live.
 Analysis artifacts: `analyze_n12.py` / `analyze2_n12.py` (disclosed path-extensions),
 refreshed JSONs, n=8 snapshots preserved (`*_n8_snapshot_20260728.json`).
+
+## Addendum 2026-07-29 — churn structure and the scaling question
+
+Two analyses added after the verdict closed. Neither changes a measured number; both
+change how the result should be read and what the next experiment should be.
+
+### Churn dwarfs the net effect
+
+Per-run discordant pairs (records that flip in either direction) run **29–45, median 38**,
+against a mean net of **+1.67**. Aggregated over all 12 seeds:
+
+| | count |
+|---|---|
+| b — base-only correct (lost) | **217** |
+| c — tuned-only correct (gained) | **237** |
+| net | **+20** over 12 runs |
+| c/b ratio | **1.092** (1.043 excluding the +11 seed) |
+
+So roughly **38 records reshuffle per run to move the total by under 2.** The adapter
+changes *which* problems solve far more than *how many*, and the directional tilt is
+4–9% on top of near-symmetric exchange. That is closer to the signature of a
+perturbation that occasionally helps than of an acquired skill, and it is consistent
+with F4 (variance ratio ≈ 1: seed totals vary exactly as independent per-record flips
+predict). Reporting the mean alone overstates how directed the effect is.
+
+Caveat on attribution: near-symmetric churn is what a weak-but-real effect looks like at
+this scale too, so this is a characterization, not a refutation of the positive direction.
+
+### Should 3–4× the training set be expected to produce a measurable gain?
+
+Assessment: **no, not on the current recipe.** Three reasons, in descending confidence:
+
+1. **The known defects scale multiplicatively, not additively.** 21.6% of loss on prompt
+   tokens and gradient weight ∝ `n_correct` both persist unchanged at larger N, so 3–4×
+   data buys 3–4× of a signal pointed away from the learnable margin. (`docs/lora_v2_work_order.md`)
+2. **Self-distillation ceiling.** Targets are the base model's own verified-correct
+   rollouts, and training loss floors within the first few steps (0.71 → ~0.45, final
+   ~0.43). That is not the profile of a data-starved run; the model fits its own outputs
+   trivially and more of them adds little to extract.
+3. **Absolute scale.** 200 → ~700 remains small for rejection-sampling fine-tuning, where
+   published gains typically appear at N in the thousands **and** with loss computed on
+   the right tokens.
+
+What is encouraging: per-seed sd is 3.45pp, so at 12 seeds a true effect of roughly
+**+2.2pp** is detectable. The point estimate is +1.67pp, so the effect only needs to
+roughly double to clear significance — and fixing the recipe is far cheaper than
+quadrupling the corpus.
+
+**Hard limitation on all of the above:** we have **one point on the N axis.** No scaling
+curve can be fit from a single measurement, so this is mechanism-based inference, not
+extrapolation from data. If the scaling question needs answering directly rather than
+argued, the informative design is a **three-point curve — N ≈ 200 / 400 / 800 on the
+fixed recipe, 4 seeds each** — which measures the slope instead of assuming it, at
+roughly the cost of one 3–4× run at 12 seeds.
+
+Sequencing that follows: v2 recipe fix at the **same** N = 200 first (free to build; both
+fixes are re-derivations of the existing training file, with no re-scraping, re-judging,
+or re-scoring), then the scaling curve only if v2 moves the mean. A separate cheap
+instrument upgrade — avg@8 at temp 0.7 rather than greedy pass@1 — reduces per-seed
+variance and makes every future run more informative without buying a single new problem.

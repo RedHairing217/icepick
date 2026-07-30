@@ -87,5 +87,8 @@ significance not established — on a recipe carrying two unfixed dataset defect
 *consistency*, and at N≈1000 would land on the same defective recipe — both defects are
 structural and inherit unchanged. **The indicated next experiment is dataset build v2**
 (prompt/completion masking + per-record weight cap/1-per-uid + explicit backfill-weight
-ruling), with N≈1000 sequenced after it. Final campaign status:
-`docs/lora_consistency_verdict.md`.
+ruling), with N≈1000 sequenced after it. Spec: `docs/lora_v2_work_order.md`. The
+scaling assessment behind that ordering — including the point that both defects scale
+multiplicatively with N rather than diluting — is in the 07-29 addendum to
+`docs/lora_consistency_verdict.md`, which also records that a single point on the N axis
+cannot establish a scaling slope. Final campaign status: same file.

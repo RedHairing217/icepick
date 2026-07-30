@@ -155,4 +155,6 @@ not an end-user-visible improvement. Anchors held in all 12 seeds; no seed outsi
 adapters interchangeable, no eval-block artifact signature. Per the decisions doc's
 D5 null branch, the leading hypothesis for the small/absent effect is now the
 dataset's known masking defect; v2 is the indicated next experiment. Full analysis:
-`docs/lora_consistency_verdict.md` n=12 section.
+`docs/lora_consistency_verdict.md` n=12 section, plus its 07-29 addendum on churn
+structure (38 records reshuffle per run to net under 2; aggregate 217 lost / 237 gained)
+and the scaling assessment. v2 spec: `docs/lora_v2_work_order.md`.
