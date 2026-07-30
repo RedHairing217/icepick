@@ -45,9 +45,9 @@ from pathlib import Path
 # fails the suite if it finds one -- so there is nowhere else to put it.
 # ============================================================================
 
-TRAIN_SERVER_IP = "69.30.85.67"   # <-- EDIT HERE: the pod's public IP -- the ssh/scp target and NOTHING else (single source of truth). Set 2026-07-30 for the v2 box (pod b3njpwlrpbzh26, CA-MTL-1). RESET to the 127.0.0.1 placeholder at RUNBOOK section 9 teardown -- RunPod reassigns IPs to other tenants, so a dead address must never linger here.
+TRAIN_SERVER_IP = "127.0.0.1"   # <-- EDIT HERE: the pod's public IP -- the ssh/scp target and NOTHING else (single source of truth). RESET to placeholder 2026-07-30 at section 9 teardown: the v2 box (pod b3njpwlrpbzh26, 69.30.85.67) was TERMINATED -- RunPod reassigns IPs to other tenants, so a dead address must never linger here. NOTE: HEAD carried run-1's dead 69.30.85.138 from 2026-07-27 to 2026-07-30 because that round's reset was made in the working tree but never committed -- commit the reset, not just the edit.
 TRAIN_SERVER_PORT = 8000        # M4-LOCAL end of the section 6 status tunnel; edit only if local 8000 is occupied
-TRAIN_SERVER_SSH_PORT = 22174   # <-- EDIT HERE when provisioning: the pod's external TCP port mapped to container 22. Set 2026-07-30. NOTE: RunPod reassigns this mapping on every container recreate (observed 22117 -> 22145 -> 22174 across one restart) -- re-read it from the pod and update here after any stop/start/restart, or ssh/scp/tunnel all fail with "connection refused".
+TRAIN_SERVER_SSH_PORT = 22       # <-- EDIT HERE when provisioning: the pod's external TCP port mapped to container 22 (reset to shipped default 2026-07-30, same reason as the IP). NOTE: RunPod reassigns this mapping on every container recreate -- observed 22117 -> 22145 -> 22174 across a single restart on 2026-07-30 -- so re-read it from the pod and update here after any stop/start/restart, or ssh/scp/tunnel all fail with "connection refused".
 TRAIN_SERVER_URL = f"http://127.0.0.1:{TRAIN_SERVER_PORT}"  # derived, tunnel-local -- what the operator curls while the section 6 tunnel is up; never carries the pod IP; never edit this line
 TRAIN_SERVER_KEY_FILE = None  # optional path proxy to a bearer-key file (raw token or KEY=VALUE); None = keyless; contents never printed/logged
 
