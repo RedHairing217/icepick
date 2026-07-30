@@ -90,3 +90,36 @@ def test_status_port_default_matches_config_box_port():
         f"run_remote_train.sh STATUS_PORT default {match.group(1)} != "
         f"config.TRAIN_STATUS_BOX_PORT {config.TRAIN_STATUS_BOX_PORT}"
     )
+
+
+def test_train_script_has_no_hardcoded_grad_accum_literal():
+    # v2 revision (2026-07-29): gradient_accumulation_steps was a hardcoded
+    # `=4` literal (the silent-hyperparameter defect flagged by both 07-28
+    # reviews); it must come from the run_config hyperparams now.
+    source = TRAIN_SCRIPT.read_text(encoding="utf-8")
+    assert not re.search(r"gradient_accumulation_steps\s*=\s*\d", source), (
+        "train_qwen3_lora.py hardcodes gradient_accumulation_steps again -- "
+        "it must be a named hyperparameter (hyperparams['grad_accum_steps'])"
+    )
+    assert "grad_accum_steps" in source
+
+
+def test_train_script_pins_formerly_silent_sftconfig_defaults():
+    # The three inherited-SFTConfig-default knobs must be spelled explicitly
+    # in the SFTConfig call, and completion-only loss must be wired for the
+    # v2 prompt/completion dataset path.
+    source = TRAIN_SCRIPT.read_text(encoding="utf-8")
+    for kwarg in ("lr_scheduler_type", "warmup_ratio", "weight_decay", "completion_only_loss"):
+        assert re.search(rf"{kwarg}\s*=", source), (
+            f"train_qwen3_lora.py no longer pins {kwarg} explicitly in SFTConfig"
+        )
+
+
+def test_train_script_v1_fallback_defaults_match_what_v1_ran():
+    # A v1 run_config.json (no new keys) must reproduce v1 exactly: the
+    # .get() fallbacks are pinned to the values v1 actually trained with.
+    source = TRAIN_SCRIPT.read_text(encoding="utf-8")
+    assert re.search(r"""\.get\(\s*['"]grad_accum_steps['"]\s*,\s*4\s*\)""", source)
+    assert re.search(r"""\.get\(\s*['"]lr_scheduler_type['"]\s*,\s*['"]linear['"]\s*\)""", source)
+    assert re.search(r"""\.get\(\s*['"]warmup_ratio['"]\s*,\s*0\.0\s*\)""", source)
+    assert re.search(r"""\.get\(\s*['"]weight_decay['"]\s*,\s*0\.0\s*\)""", source)

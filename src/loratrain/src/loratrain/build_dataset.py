@@ -8,14 +8,19 @@ the WRITTEN file from disk before returning. ``main()`` is the CLI
 entrypoint (``loratrain-build-dataset``): validate config, run
 ``build()`` with the config pins, print a short JSON summary.
 
-SFT example schema (one JSON object per line of ``data/sft_train.jsonl``)::
+SFT example schema v2 (one JSON object per line of the built
+``sft_train.jsonl``; datasets land under ``data/v2/<policy-label>/``,
+never over the v1 artifacts)::
 
     {
-      "messages": [
+      "prompt": [
         {"role": "system", "content": "..."},
-        {"role": "user", "content": "..."},
+        {"role": "user", "content": "..."}
+      ],
+      "completion": [
         {"role": "assistant", "content": "..."}
       ],
+      "weight": 0.5,          # ONLY under the "inverse" weight policy
       "provenance": {
         "uid": "...",
         "rollout_uid": "...",
@@ -41,6 +46,28 @@ other registry file does -- see "Rollout reconciliation" below).
 pinned GGUF 7/8 backfill roster (``config.BACKFILL_TRACE_SOURCES``,
 Nicky's ruling 2026-07-26) rather than ``band_corpus.jsonl`` -- see
 "GGUF 7/8 backfill" below.
+
+Why prompt/completion columns (defect-1 fix, 2026-07-29): v1 emitted a
+single ``messages`` list that the box-side trainer pre-templated into
+one string -- a language-modeling dataset, so SFTTrainer computed loss
+over the FULL sequence, prompt tokens included (measured: 21.6% of
+trained characters were system+user text, the identical system prompt
+repeated in all 700 rows). In the pinned trl 0.29.1, a
+prompt/completion dataset gets completion-only loss by default: the
+trainer renders ``prompt`` with ``add_generation_prompt=True``, renders
+``prompt + completion`` through the same chat template v1 used (total
+rendered text byte-identical to v1's -- the loss mask is the only
+train-time delta), and masks every prompt-token label to -100.
+``assistant_only_loss`` is NOT usable here -- it requires a
+``{% generation %}``-tagged chat template, which Qwen3's lacks.
+
+Weight policy (defect-2 fix, same date): v1's one-row-per-correct-trace
+harvest made a record's gradient mass equal ``n_correct`` -- how often
+the BASE model already solved it (anti-difficulty). ``apply_weight_policy``
+(config knob ``WEIGHT_POLICY``, default ``cap1``; CLI ``--weight-policy``)
+caps rows per uid (``cap1``/``capk``, seeded deterministic selection --
+``SELECTION_RULE``) or stamps per-row ``weight = 1/n`` (``inverse``).
+Which policy ships is Nicky's decision; all three build.
 
 The assistant message's ``content`` is the rollout's ``output`` field
 copied VERBATIM -- never the corpus ``answer`` field. This is the
@@ -125,11 +152,13 @@ rollouts file + discover the registry -> load each registry file
 file (routed, else unique alternative, else hard fail) -> harvest
 verified-correct traces from the authoritative index (per-record
 verdict-tally re-check against the corpus row; backfill examples
-stamped) -> dedupe -> re-verify + assert verbatim targets + re-check
-leakage (nested shape, defense in depth) -> write the dataset +
-manifest (with its backfill audit block) -> re-read the WRITTEN file
-and re-verify every row from disk. Nothing is written until every guard
-above the "write" step has passed.
+stamped) -> dedupe -> apply the weight policy (defect 2) -> re-verify +
+assert prompt/completion well-formedness + weight policy honored +
+verbatim targets + re-check leakage (nested shape, defense in depth) ->
+write the dataset + manifest (with its backfill + weight-policy audit
+blocks) -> re-read the WRITTEN file and re-verify every row from disk
+(schema + policy included). Nothing is written until every guard above
+the "write" step has passed.
 
 Guard + build functions in this module (all real, all independently tested):
 
@@ -158,6 +187,9 @@ Guard + build functions in this module (all real, all independently tested):
   reconcile_record                     -- routed-or-unique-alternative resolution
   harvest_correct_traces               -- verdict-tally re-check + SFT harvest
   build_sft_example                    -- one verbatim SFT example (never reads "answer")
+  apply_weight_policy                  -- defect-2 fix: cap1/capk/inverse row policy
+  assert_weight_policy_honored         -- per-uid caps / exact 1/n weights re-check
+  assert_prompt_completion_wellformed  -- defect-1 fix: schema + wire-format pins
   assert_verbatim_targets              -- byte-identity of assistant content vs source
   verify_written_dataset               -- post-write, re-read-from-disk audit
   build_manifest / write_dataset       -- pure manifest assembly / jsonl writer
@@ -208,6 +240,16 @@ class SplitNotBuiltError(RuntimeError):
     never builds them itself. Any ``evalharness/data/retired_*`` path
     (e.g. ``retired_20260716/``, ``retired_20260726/``) is retired and
     must never be pointed at; see ``assert_not_retired_path``.
+    """
+
+
+class WeightPolicyError(RuntimeError):
+    """The weight policy (defect-2 fix) is unknown, misconfigured, or violated.
+
+    Raised both at application time (``apply_weight_policy`` refusing an
+    unknown policy / non-positive cap) and at re-verification time
+    (``assert_weight_policy_honored`` finding a per-uid row count above
+    the cap, or an ``inverse`` weight that is not exactly ``1/n``).
     """
 
 
@@ -1142,11 +1184,29 @@ def build_sft_example(
     (Nicky's ruling 2026-07-26) rather than ``band_corpus.jsonl`` proper
     -- always present and explicit (``True``/``False``), never inferred
     from absence, so a manifest/dataset consumer never has to guess.
+
+    Schema v2 (defect-1 fix, 2026-07-29): ``prompt`` / ``completion``
+    message-list columns replace v1's single ``messages`` list. v1
+    pre-templated all three messages into one string box-side, which fed
+    SFTTrainer a language-modeling dataset -- full-sequence loss, no
+    completion masking, 21.6% of trained characters on system+user text.
+    In the pinned trl 0.29.1 a prompt/completion dataset gets
+    completion-only loss BY DEFAULT: the trainer renders ``prompt`` with
+    ``apply_chat_template(..., add_generation_prompt=True)``, renders
+    ``prompt + completion`` through the same template v1 used (so the
+    TOTAL rendered training text is byte-identical to v1's -- the loss
+    mask is the only train-time delta), and sets every prompt token's
+    label to -100. The message contents themselves are unchanged from
+    v1: same wire-format pins, same verbatim ``rollout["output"]``
+    target. (``assistant_only_loss`` is NOT usable here: it requires a
+    ``{% generation %}``-tagged chat template, which Qwen3's lacks.)
     """
     return {
-        "messages": [
+        "prompt": [
             {"role": "system", "content": config.PASS_AT_K_SYSTEM_PROMPT},
             {"role": "user", "content": record["statement"] + config.PASS_AT_K_NO_THINK_SUFFIX},
+        ],
+        "completion": [
             {"role": "assistant", "content": rollout["output"]},
         ],
         "provenance": {
@@ -1280,7 +1340,8 @@ def assert_verbatim_targets(examples, rollout_index) -> None:
     This is D4's "the builder asserts targets are verbatim rollout
     outputs" made concrete: the ``verbatim_output`` provenance flag is a
     promise, and this function is what makes the promise checkable
-    rather than merely stamped.
+    rather than merely stamped. Schema v2: the assistant message lives
+    in the example's ``completion`` column (its single message).
     """
     for example in examples:
         prov = example["provenance"]
@@ -1291,9 +1352,16 @@ def assert_verbatim_targets(examples, rollout_index) -> None:
                 f"assert_verbatim_targets: no rollout found in the index for "
                 f"{key} -- cannot verify verbatim-ness."
             )
+        completion = example.get("completion") or []
         assistant_content = next(
-            m["content"] for m in example["messages"] if m["role"] == "assistant"
+            (m["content"] for m in completion if m.get("role") == "assistant"), None
         )
+        if assistant_content is None:
+            raise TraceIntegrityError(
+                f"uid={prov['uid']} rollout_uid={prov['rollout_uid']}: example "
+                "has no assistant message in its 'completion' column -- cannot "
+                "verify verbatim-ness."
+            )
         source_output = rollout["output"]
         if assistant_content != source_output:
             raise TraceIntegrityError(
@@ -1304,7 +1372,265 @@ def assert_verbatim_targets(examples, rollout_index) -> None:
             )
 
 
-def verify_written_dataset(dataset_path: Path, rollout_index: dict) -> int:
+def assert_prompt_completion_wellformed(examples) -> None:
+    """Hard-fail unless every example's prompt/completion columns are well-formed.
+
+    The defect-1 invariant made checkable: ``prompt`` must be exactly
+    ``[system, user]`` with the system content equal to the pinned
+    ``config.PASS_AT_K_SYSTEM_PROMPT`` and the user content a non-empty
+    string ending in the pinned ``config.PASS_AT_K_NO_THINK_SUFFIX``
+    (wire-format byte-identity, AGENTS.md invariant 2 / README D4);
+    ``completion`` must be exactly ``[assistant]`` with non-empty string
+    content. An empty prompt or completion would silently train on
+    nothing (or on everything, if a consumer fell back to concatenation)
+    -- this is the guard whose absence let defect 1 ship.
+    """
+    for example in examples:
+        prov = _normalize_provenance(example)
+        uid = prov.get("uid", "<unknown>")
+        problems = []
+
+        prompt = example.get("prompt")
+        if (
+            not isinstance(prompt, list)
+            or len(prompt) != 2
+            or prompt[0].get("role") != "system"
+            or prompt[1].get("role") != "user"
+        ):
+            problems.append(
+                f"prompt must be exactly [system, user] message dicts (got {prompt!r})"
+            )
+        else:
+            system_content = prompt[0].get("content")
+            user_content = prompt[1].get("content")
+            if system_content != config.PASS_AT_K_SYSTEM_PROMPT:
+                problems.append(
+                    f"system content {system_content!r} != the pinned "
+                    "PASS_AT_K_SYSTEM_PROMPT (wire-format drift)"
+                )
+            if not isinstance(user_content, str) or not user_content.strip():
+                problems.append(f"user content must be a non-empty str (got {user_content!r})")
+            elif not user_content.endswith(config.PASS_AT_K_NO_THINK_SUFFIX):
+                problems.append(
+                    f"user content does not end with the pinned no-think suffix "
+                    f"{config.PASS_AT_K_NO_THINK_SUFFIX!r} (wire-format drift)"
+                )
+
+        completion = example.get("completion")
+        if (
+            not isinstance(completion, list)
+            or len(completion) != 1
+            or completion[0].get("role") != "assistant"
+        ):
+            problems.append(
+                f"completion must be exactly [assistant] message dict (got {completion!r})"
+            )
+        elif not isinstance(completion[0].get("content"), str) or not completion[0]["content"]:
+            problems.append(
+                f"assistant content must be a non-empty str (got {completion[0].get('content')!r})"
+            )
+        elif "<think>" in completion[0]["content"] or "</think>" in completion[0]["content"]:
+            # Latent wire-format hazard found during the v2 masking proof
+            # (2026-07-29): Qwen3's chat template SPLITS assistant content on
+            # '</think>' and re-normalizes it (strip/lstrip of newlines)
+            # before rendering, so a think tag inside a stored-verbatim
+            # target would be silently rewritten between the dataset bytes
+            # and the trained bytes -- breaking the D4 verbatim<->trained
+            # correspondence without any guard noticing. Measured 0/700
+            # harvested traces carry these tags (LM Studio strips the think
+            # block before the rollout 'output' field), so this refusal
+            # changes nothing today; it exists to make the hazard loud if a
+            # future harvest ever ships one.
+            problems.append(
+                "assistant content contains a '<think>'/'</think>' tag -- the "
+                "Qwen3 chat template would split and re-normalize it at "
+                "render time, silently changing the trained bytes vs the "
+                "stored verbatim target"
+            )
+
+        if problems:
+            raise TraceIntegrityError(
+                f"uid={uid}: malformed prompt/completion example: {'; '.join(problems)}"
+            )
+
+
+def _selection_rank(seed: int, uid, rollout_uid) -> str:
+    """Deterministic per-trace rank key for the cap policies.
+
+    sha256 over ``"{seed}:{uid}:{rollout_uid}"`` -- a pure function of
+    the seed and the trace's identity, so selection is reproducible from
+    the manifest alone, independent of file order, dict order, or RNG
+    state ("do not take 'first N' silently" -- work order 2026-07-29).
+    """
+    return hashlib.sha256(f"{seed}:{uid}:{rollout_uid}".encode("utf-8")).hexdigest()
+
+
+SELECTION_RULE = (
+    "per uid: rank traces by sha256('{seed}:{uid}:{rollout_uid}') ascending, "
+    "keep the first min(cap, n_traces); kept rows stay in harvest order "
+    "(sample_idx ascending within uid)"
+)
+
+
+def apply_weight_policy(examples: list, *, policy: str, cap_k: int, seed: int) -> tuple:
+    """Apply the defect-2 gradient-weight policy; return ``(kept, policy_block)``.
+
+    v1 emitted one row per verified-correct trace, so a record's gradient
+    mass equaled ``n_correct`` -- how often the BASE model already solved
+    it (anti-difficulty weighting; see config.WEIGHT_POLICY). Policies:
+
+    - ``cap1``: keep exactly one trace per uid.
+    - ``capk``: keep at most ``cap_k`` traces per uid.
+    - ``inverse``: keep every trace; stamp each kept example with a
+      top-level ``weight = 1/n`` (n = that uid's trace count post-dedupe,
+      == the corpus row's ``n_correct``) so every uid carries equal total
+      gradient mass. The weight is exactly representable/round-trippable
+      as a JSON double; ``assert_weight_policy_honored`` re-checks
+      ``weight == 1.0/n`` on exact equality.
+
+    Selection under the cap policies follows ``SELECTION_RULE`` (seeded
+    sha256 rank -- deterministic, manifest-recorded, never file order).
+    Kept examples preserve their harvest order; examples are never
+    mutated in place (kept rows are shallow-copied when a weight is
+    stamped). ``policy_block`` is the manifest's ``weight_policy`` audit
+    block: policy, label, cap, seed, selection rule, rows before/after,
+    and the per-uid rows-per-uid histograms before/after.
+    """
+    if policy not in config.VALID_WEIGHT_POLICIES:
+        raise WeightPolicyError(
+            f"unknown weight policy {policy!r} -- must be one of "
+            f"{config.VALID_WEIGHT_POLICIES}"
+        )
+    if policy == "capk" and (
+        not isinstance(cap_k, int) or isinstance(cap_k, bool) or cap_k < 1
+    ):
+        raise WeightPolicyError(f"capk requires a positive int cap_k (got {cap_k!r})")
+
+    by_uid: dict = {}
+    for example in examples:
+        prov = _normalize_provenance(example)
+        by_uid.setdefault(prov.get("uid"), []).append(example)
+
+    cap = {"cap1": 1, "capk": cap_k}.get(policy)  # None for inverse
+    kept = []
+    for uid, uid_examples in by_uid.items():
+        if cap is None:  # inverse: keep all, equalize per-uid gradient mass
+            weight = 1.0 / len(uid_examples)
+            for example in uid_examples:
+                stamped = dict(example)
+                stamped["weight"] = weight
+                kept.append(stamped)
+            continue
+        ranked = sorted(
+            uid_examples,
+            key=lambda ex: _selection_rank(
+                seed, uid, _normalize_provenance(ex).get("rollout_uid")
+            ),
+        )
+        selected_keys = {
+            _normalize_provenance(ex).get("rollout_uid") for ex in ranked[:cap]
+        }
+        kept.extend(
+            ex
+            for ex in uid_examples
+            if _normalize_provenance(ex).get("rollout_uid") in selected_keys
+        )
+
+    # Restore global harvest order (records order, sample_idx within record):
+    # the per-uid grouping above preserved it within uids, and dict insertion
+    # order preserved it across uids, so `kept` is already in harvest order
+    # for the cap policies; the inverse branch appended in place too.
+
+    def _histogram(rows_per_uid_counts) -> dict:
+        hist: dict = {}
+        for count in rows_per_uid_counts:
+            hist[count] = hist.get(count, 0) + 1
+        return {str(k): hist[k] for k in sorted(hist)}
+
+    policy_block = {
+        "policy": policy,
+        "label": config.weight_policy_label(policy, cap_k),
+        "cap_k": cap_k if policy == "capk" else None,
+        "seed": seed,
+        "selection_rule": SELECTION_RULE if cap is not None else
+            "keep all traces; per-row weight = 1/n_traces(uid)",
+        "rows_before": len(examples),
+        "rows_after": len(kept),
+        "n_uids": len(by_uid),
+        "rows_per_uid_before": _histogram(len(v) for v in by_uid.values()),
+        "rows_per_uid_after": _histogram(
+            sum(1 for ex in kept if _normalize_provenance(ex).get("uid") == uid)
+            for uid in by_uid
+        ),
+        "weighted": cap is None,
+    }
+    return kept, policy_block
+
+
+def assert_weight_policy_honored(examples, *, policy: str, cap_k: int) -> None:
+    """Hard-fail unless ``examples`` satisfy the declared weight policy.
+
+    Re-verification counterpart of ``apply_weight_policy`` (same idiom as
+    the verbatim/leakage re-checks -- the property is asserted on the
+    final example list AND re-asserted from disk by
+    ``verify_written_dataset``): per-uid row counts within the cap for
+    the cap policies (and no stray ``weight`` field), and for
+    ``inverse`` every row of a uid carrying exactly ``weight == 1.0/n``
+    where n is that uid's row count.
+    """
+    if policy not in config.VALID_WEIGHT_POLICIES:
+        raise WeightPolicyError(
+            f"unknown weight policy {policy!r} -- must be one of "
+            f"{config.VALID_WEIGHT_POLICIES}"
+        )
+
+    by_uid: dict = {}
+    for example in examples:
+        prov = _normalize_provenance(example)
+        by_uid.setdefault(prov.get("uid"), []).append(example)
+
+    problems = []
+    if policy in ("cap1", "capk"):
+        cap = 1 if policy == "cap1" else cap_k
+        offenders = {uid: len(v) for uid, v in by_uid.items() if len(v) > cap}
+        if offenders:
+            shown = dict(list(sorted(offenders.items()))[:5])
+            problems.append(
+                f"{len(offenders)} uid(s) exceed the {policy} cap of {cap} "
+                f"rows/uid: {shown}"
+            )
+        weighted = [
+            _normalize_provenance(ex).get("uid")
+            for ex in examples
+            if "weight" in ex
+        ]
+        if weighted:
+            problems.append(
+                f"{len(weighted)} example(s) carry a 'weight' field under the "
+                f"unweighted {policy} policy (first: {weighted[:3]})"
+            )
+    else:  # inverse
+        for uid, uid_examples in sorted(by_uid.items(), key=lambda kv: str(kv[0])):
+            expected = 1.0 / len(uid_examples)
+            bad = [ex.get("weight") for ex in uid_examples if ex.get("weight") != expected]
+            if bad:
+                problems.append(
+                    f"uid={uid}: {len(bad)} row(s) with weight != 1/{len(uid_examples)} "
+                    f"(expected {expected!r}, got {bad[:3]!r})"
+                )
+                if len(problems) >= 5:
+                    break
+
+    if problems:
+        raise WeightPolicyError(
+            "WEIGHT POLICY VIOLATED (" + "; ".join(problems) + ") -- the "
+            "dataset does not satisfy its declared policy; refusing."
+        )
+
+
+def verify_written_dataset(
+    dataset_path: Path, rollout_index: dict, *, policy: str = None, cap_k: int = None
+) -> int:
     """Post-write audit: re-read ``dataset_path`` and re-verify every row from disk.
 
     The final check in the D4 chain: ``verbatim_output`` is checked
@@ -1312,10 +1638,14 @@ def verify_written_dataset(dataset_path: Path, rollout_index: dict) -> int:
     in-memory examples by ``assert_verbatim_targets`` -- reading the
     bytes actually written to disk closes the loop against any bug
     between assembling ``examples`` and serializing them (encoding,
-    truncation, a stray transform). Returns the verified row count.
+    truncation, a stray transform). Every row is also re-checked for
+    prompt/completion well-formedness (defect-1 invariant), and -- when
+    ``policy`` is given -- the whole file is re-checked against the
+    declared weight policy (defect-2 invariant). Returns the verified
+    row count.
     """
     dataset_path = Path(dataset_path)
-    n = 0
+    rows = []
     with dataset_path.open("r", encoding="utf-8") as fh:
         for lineno, line in enumerate(fh, start=1):
             line = line.strip()
@@ -1326,9 +1656,12 @@ def verify_written_dataset(dataset_path: Path, rollout_index: dict) -> int:
             except json.JSONDecodeError as exc:
                 raise TraceIntegrityError(f"{dataset_path}:{lineno}: invalid JSON ({exc})") from exc
             assert_verified_correct(example)
+            assert_prompt_completion_wellformed([example])
             assert_verbatim_targets([example], rollout_index)
-            n += 1
-    return n
+            rows.append(example)
+    if policy is not None:
+        assert_weight_policy_honored(rows, policy=policy, cap_k=cap_k)
+    return len(rows)
 
 
 def write_dataset(examples, dataset_path: Path) -> None:
@@ -1382,6 +1715,7 @@ def build_manifest(
     duplicates_dropped: int,
     reconciliation: dict,
     backfill: dict,
+    weight_policy: dict,
     guards: list,
 ) -> dict:
     """Assemble the ``dataset_manifest.json`` dict.
@@ -1402,7 +1736,14 @@ def build_manifest(
     the GGUF 7/8 backfill audit block: uids, pinned source files + their
     shas, and per-uid harvested trace counts -- empty-shaped
     (``{"uids": [], "sources": [], "per_uid_trace_counts": {}}``) when
-    this build's split has no backfill roster.
+    this build's split has no backfill roster. ``weight_policy`` is
+    ``apply_weight_policy``'s audit block (defect-2 fix: policy, cap,
+    seed, selection rule, rows/histograms before and after).
+    ``trainer_hyperparams`` echoes every training hyperparameter --
+    including the four that were silent in v1 (grad-accum, scheduler,
+    warmup, weight decay; config.py "Trainer schedule/accumulation
+    pins") and the completion-only-loss contract -- so the dataset
+    manifest alone states how its rows are meant to be consumed.
     """
     per_uid_trace_counts = {uid: 0 for uid in train_uids}
     for example in examples:
@@ -1412,6 +1753,17 @@ def build_manifest(
     return {
         "stage": "loratrain_build_dataset",
         "created": datetime.now(timezone.utc).isoformat(),
+        "sft_schema": {
+            "format": "prompt_completion",
+            "version": 2,
+            "completion_only_loss": True,
+            "note": (
+                "defect-1 fix (2026-07-29): prompt/completion message columns; "
+                "trl 0.29.1 masks prompt-token labels to -100 by default for "
+                "this dataset type. v1 was a pre-templated 'messages' LM "
+                "dataset trained with full-sequence loss."
+            ),
+        },
         "seed": seed,
         "corpus": {
             "path": str(corpus_path),
@@ -1449,6 +1801,27 @@ def build_manifest(
         "duplicates_dropped": duplicates_dropped,
         "reconciliation": reconciliation,
         "backfill_7of8": backfill,
+        "weight_policy": dict(weight_policy),
+        "trainer_hyperparams": {
+            "rank": config.LORA_RANK,
+            "alpha": config.LORA_ALPHA,
+            "dropout": config.LORA_DROPOUT,
+            "lr": config.LEARNING_RATE,
+            "epochs": config.EPOCHS,
+            "micro_batch_size": config.MICRO_BATCH_SIZE,
+            "max_seq_len": config.MAX_SEQ_LEN,
+            "grad_accum_steps": config.GRAD_ACCUM_STEPS,
+            "lr_scheduler_type": config.LR_SCHEDULER_TYPE,
+            "warmup_ratio": config.WARMUP_RATIO,
+            "weight_decay": config.WEIGHT_DECAY,
+            "completion_only_loss": True,
+            "note": (
+                "grad_accum_steps/lr_scheduler_type/warmup_ratio/weight_decay "
+                "were silent in v1 (hardcoded literal + inherited SFTConfig "
+                "defaults, unrecorded in manifests); values unchanged, now "
+                "pinned and echoed (2026-07-29)."
+            ),
+        },
         "guards": list(guards),
     }
 
@@ -1477,10 +1850,13 @@ BUILD_GUARD_STEPS = (
     "reconcile_records[routed_or_unique_alternative]",
     "harvest_correct_traces",
     "dedupe_examples",
+    "apply_weight_policy",
     "assert_verified_correct[examples]",
+    "assert_prompt_completion_wellformed",
+    "assert_weight_policy_honored",
     "assert_verbatim_targets",
     "assert_no_leakage[examples]",
-    "verify_written_dataset",
+    "verify_written_dataset[schema+policy]",
 )
 
 
@@ -1496,6 +1872,8 @@ def build(
     expected_split_sha256: str,
     backfill_trace_sources: dict,
     seed: int,
+    weight_policy: str,
+    weight_policy_cap_k: int,
     repo_root=None,
 ) -> dict:
     """Build ``sft_train.jsonl`` + ``dataset_manifest.json`` -- the W2 orchestrator.
@@ -1509,7 +1887,11 @@ def build(
     tests pass their own ``tmp_path`` fixture root instead.
     ``backfill_trace_sources`` is ``config.BACKFILL_TRACE_SOURCES`` (the
     GGUF 7/8 backfill roster, Nicky's ruling 2026-07-26) -- pass ``{}``
-    for a split with no backfill uids.
+    for a split with no backfill uids. ``weight_policy`` /
+    ``weight_policy_cap_k`` select the defect-2 gradient-weight policy
+    (``apply_weight_policy``; config knobs WEIGHT_POLICY /
+    WEIGHT_POLICY_CAP_K, CLI-overridable) -- required keywords like the
+    pins, so no code path silently builds under an accidental policy.
 
     Guard order (see ``BUILD_GUARD_STEPS``, echoed into the written
     manifest as an audit trail, and the module docstring's "Build flow"
@@ -1545,15 +1927,20 @@ def build(
           indexes (per-record tally re-check, n_correct >= 1,
           non-empty output); backfill examples get
           provenance.backfill_7of8 = True
-      17. dedupe on (uid, rollout_uid)
-      18. re-verify every example, assert byte-identical targets,
-          re-check leakage (nested shape, defense in depth)
+      17. dedupe on (uid, rollout_uid), then apply the weight policy
+          (defect 2: cap1/capk seeded deterministic selection, or
+          inverse per-row 1/n weights)
+      18. re-verify every example: verified-correct, prompt/completion
+          well-formed (defect 1), weight policy honored (defect 2),
+          byte-identical targets, leakage re-check (nested shape,
+          defense in depth)
       19. write the dataset to a .tmp sibling
-      20. re-read the WRITTEN .tmp from disk and re-verify every row;
-          only then atomically publish it to its final name and write
-          the manifest (with its backfill audit block) -- a
-          verification failure leaves NO final artifacts (the .tmp
-          stays behind for forensics)
+      20. re-read the WRITTEN .tmp from disk and re-verify every row
+          (schema and policy included); only then atomically publish it
+          to its final name and write the manifest (with its backfill
+          and weight-policy audit blocks) -- a verification failure
+          leaves NO final artifacts (the .tmp stays behind for
+          forensics)
 
     See README "Split & corpus", "Non-negotiable ordering & invariants",
     and D4 for the invariants each step enforces.
@@ -1681,9 +2068,18 @@ def build(
     examples = dedupe_examples(examples)
     duplicates_dropped = n_before_dedupe - len(examples)
 
-    # 18. Re-verify every example; assert byte-identical targets against a
-    #     verification map drawn from each record's AUTHORITATIVE index;
-    #     re-check leakage on the nested provenance shape (defense in depth).
+    # 17b. Apply the defect-2 gradient-weight policy (cap1/capk: seeded
+    #      deterministic per-uid trace selection; inverse: per-row 1/n
+    #      weights). Runs AFTER dedupe so caps count unique traces.
+    examples, weight_policy_block = apply_weight_policy(
+        examples, policy=weight_policy, cap_k=weight_policy_cap_k, seed=seed
+    )
+
+    # 18. Re-verify every example; assert prompt/completion well-formedness
+    #     (defect-1 invariant) and the declared weight policy (defect-2
+    #     invariant); assert byte-identical targets against a verification
+    #     map drawn from each record's AUTHORITATIVE index; re-check
+    #     leakage on the nested provenance shape (defense in depth).
     verification_index = {}
     for record in records:
         uid = record["uid"]
@@ -1692,6 +2088,8 @@ def build(
             verification_index[(uid, rollout_uid)] = index[(uid, rollout_uid)]
     for example in examples:
         assert_verified_correct(example)
+    assert_prompt_completion_wellformed(examples)
+    assert_weight_policy_honored(examples, policy=weight_policy, cap_k=weight_policy_cap_k)
     assert_verbatim_targets(examples, verification_index)
     assert_no_leakage(examples, eval_papers, eval_uids)
 
@@ -1711,7 +2109,10 @@ def build(
 
     # 20. Re-read the WRITTEN bytes and re-verify every row from disk,
     #     BEFORE the file exists under its final name.
-    n = verify_written_dataset(dataset_tmp_path, verification_index)
+    n = verify_written_dataset(
+        dataset_tmp_path, verification_index,
+        policy=weight_policy, cap_k=weight_policy_cap_k,
+    )
     if n != len(examples):
         raise TraceIntegrityError(
             f"post-write verification read {n} row(s) from {dataset_tmp_path}, "
@@ -1780,6 +2181,7 @@ def build(
         duplicates_dropped=duplicates_dropped,
         reconciliation=reconciliation,
         backfill=backfill,
+        weight_policy=weight_policy_block,
         guards=list(BUILD_GUARD_STEPS),
     )
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -1834,10 +2236,34 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--output-dir",
         type=Path,
-        default=config.DATA_DIR,
+        default=None,
         help=(
             "Where sft_train.jsonl and dataset_manifest.json are written "
-            f"(default: config.DATA_DIR = {config.DATA_DIR})."
+            "(default: config.DATA_V2_DIR/<policy-label>, e.g. "
+            f"{config.DATA_V2_DIR / config.weight_policy_label()}; v1 "
+            "artifacts under data/ and data/run1_final/ are never the "
+            "default target and must not be overwritten)."
+        ),
+    )
+    p.add_argument(
+        "--weight-policy",
+        choices=list(config.VALID_WEIGHT_POLICIES),
+        default=config.WEIGHT_POLICY,
+        help=(
+            "Defect-2 gradient-weight policy: cap1 (one trace per uid, "
+            "default), capk (at most --cap-k traces per uid), or inverse "
+            "(all traces, per-row weight = 1/n_traces). Which policy SHIPS "
+            f"is Nicky's decision (default: config.WEIGHT_POLICY = "
+            f"{config.WEIGHT_POLICY!r})."
+        ),
+    )
+    p.add_argument(
+        "--cap-k",
+        type=int,
+        default=config.WEIGHT_POLICY_CAP_K,
+        help=(
+            "Rows-per-uid cap for --weight-policy capk (default: "
+            f"config.WEIGHT_POLICY_CAP_K = {config.WEIGHT_POLICY_CAP_K})."
         ),
     )
     p.add_argument(
@@ -1870,17 +2296,25 @@ def main(argv=None) -> int:
 
     config.validate_config()
 
+    output_dir = args.output_dir
+    if output_dir is None:
+        output_dir = config.DATA_V2_DIR / config.weight_policy_label(
+            args.weight_policy, args.cap_k
+        )
+
     manifest = build(
         corpus_path=args.corpus,
         split_path=args.split,
         train_uids_path=args.train_uids,
         eval_set_path=args.eval_set,
-        output_dir=args.output_dir,
+        output_dir=output_dir,
         expected_corpus_sha256=config.EXPECTED_CORPUS_SHA256,
         expected_corpus_rows=config.EXPECTED_CORPUS_ROWS,
         expected_split_sha256=config.EXPECTED_SPLIT_SHA256,
         backfill_trace_sources=config.BACKFILL_TRACE_SOURCES,
         seed=config.SEED,
+        weight_policy=args.weight_policy,
+        weight_policy_cap_k=args.cap_k,
         repo_root=args.repo_root,
     )
 
@@ -1889,6 +2323,12 @@ def main(argv=None) -> int:
         "dataset_path": manifest["dataset"]["path"],
         "rows": manifest["dataset"]["rows"],
         "sha256": manifest["dataset"]["sha256"],
+        "weight_policy": {
+            "policy": manifest["weight_policy"]["policy"],
+            "label": manifest["weight_policy"]["label"],
+            "rows_before": manifest["weight_policy"]["rows_before"],
+            "rows_after": manifest["weight_policy"]["rows_after"],
+        },
         "reconciliation": {
             "routed": manifest["reconciliation"]["routed"],
             "unique_alternative": manifest["reconciliation"]["unique_alternative"],

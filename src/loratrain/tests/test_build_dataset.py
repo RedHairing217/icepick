@@ -257,6 +257,12 @@ def _build_kwargs(env, **overrides):
         expected_split_sha256=env["expected_split_sha256"],
         backfill_trace_sources=env["backfill_trace_sources"],
         seed=env["seed"],
+        # Default policy for the pre-v2 test scenarios: inverse keeps EVERY
+        # harvested trace (weights aside), so all the row-level expectations
+        # written against the v1 one-row-per-trace harvest hold unchanged.
+        # cap1/capk behavior gets its own dedicated tests below.
+        weight_policy=env.get("weight_policy", "inverse"),
+        weight_policy_cap_k=env.get("weight_policy_cap_k", 3),
         repo_root=env["repo_root"],
     )
     kwargs.update(overrides)
@@ -347,12 +353,15 @@ def test_happy_path_rows_messages_and_manifest(env):
     for row in rows:
         prov = row["provenance"]
         uid = prov["uid"]
-        assert row["messages"][0] == {
+        assert row["prompt"][0] == {
             "role": "system",
             "content": "Solve the problem. State only the final answer inside \\boxed{}.",
         }
-        assert row["messages"][1] == {"role": "user", "content": statement_by_uid[uid] + " /no_think"}
-        assert row["messages"][2]["role"] == "assistant"
+        assert row["prompt"][1] == {"role": "user", "content": statement_by_uid[uid] + " /no_think"}
+        assert len(row["prompt"]) == 2
+        assert len(row["completion"]) == 1
+        assert row["completion"][0]["role"] == "assistant"
+        assert "messages" not in row  # schema v2: prompt/completion replace messages
         assert prov["verdict"] == "correct"
         assert prov["verbatim_output"] is True
         assert prov["corpus_sha256"] == env["expected_corpus_sha256"]
@@ -364,9 +373,9 @@ def test_happy_path_rows_messages_and_manifest(env):
     # Last-occurrence indexing: the harvested u1-r00 is the CLEAN final
     # line, byte-identical, and the stale earlier-pass content appears
     # nowhere in the dataset.
-    assert weird_row["messages"][2]["content"] == "\n\nProof: the square root of two is √2.   "
+    assert weird_row["completion"][0]["content"] == "\n\nProof: the square root of two is √2.   "
     assert weird_row["provenance"]["sample_idx"] == 0
-    assert all(r["messages"][2]["content"] != STALE_DUP_LINE["output"] for r in rows)
+    assert all(r["completion"][0]["content"] != STALE_DUP_LINE["output"] for r in rows)
 
     for row in rows:
         prov = row["provenance"]
@@ -419,7 +428,7 @@ def test_answer_never_leaks_into_targets(env):
 
     answers = {row["answer"] for row in env["corpus_rows"]}
     for row in rows:
-        assert row["messages"][2]["content"] not in answers
+        assert row["completion"][0]["content"] not in answers
 
 
 def test_build_succeeds_with_no_answer_key_at_all(env):
@@ -757,7 +766,7 @@ def test_unique_alternative_reconciliation_harvests_from_alt_file(env):
     ]
     u5_rows = [r for r in rows if r["provenance"]["uid"] == "u5"]
     assert len(u5_rows) == 1
-    assert u5_rows[0]["messages"][2]["content"] == "u5 CORRECT output from the rerun pass."
+    assert u5_rows[0]["completion"][0]["content"] == "u5 CORRECT output from the rerun pass."
     assert u5_rows[0]["provenance"]["reconciled_via"] == "unique_alternative"
     assert u5_rows[0]["provenance"]["trace_file"] == "out/remote_rescore/fake_alt/_progress/rollouts.jsonl"
     # source_file stays the corpus row's original (stale) claim -- the two
@@ -942,7 +951,17 @@ def test_main_happy_path_writes_dataset_and_manifest(env, monkeypatch, capsys):
     assert (env["output_dir"] / "sft_train.jsonl").exists()
     assert (env["output_dir"] / "dataset_manifest.json").exists()
     summary = json.loads(capsys.readouterr().out)
-    assert summary["rows"] == HAPPY_PATH_N_EXAMPLES
+    # main() builds under config.WEIGHT_POLICY -- default cap1: one trace
+    # per uid, so 5 rows (u1's second trace capped away), not the 6-row
+    # uncapped harvest.
+    assert config.WEIGHT_POLICY == "cap1"
+    assert summary["rows"] == len(TRAIN_SPECS)
+    assert summary["weight_policy"] == {
+        "policy": "cap1",
+        "label": "cap1",
+        "rows_before": HAPPY_PATH_N_EXAMPLES,
+        "rows_after": len(TRAIN_SPECS),
+    }
 
 
 def test_main_missing_split_propagates_split_not_built_error(env, monkeypatch):
@@ -987,9 +1006,9 @@ def test_backfill_happy_path_harvested_with_provenance_flag(env):
         assert prov["verbatim_output"] is True
         assert prov["source_file"] == added["source_file"]
         assert prov["reconciled_via"] == "routed"
-        assert row["messages"][1]["content"] == added["statement"] + " /no_think"
+        assert row["prompt"][1]["content"] == added["statement"] + " /no_think"
     # No wrong-verdict output (b0-r07) ever gets harvested.
-    assert all("wrong output" not in r["messages"][2]["content"] for r in b0_rows)
+    assert all("wrong output" not in r["completion"][0]["content"] for r in b0_rows)
 
     # Non-backfill rows are explicitly flagged False, not merely absent.
     non_backfill_rows = [r for r in rows if r["provenance"]["uid"] != "b0"]
@@ -1159,3 +1178,138 @@ def test_leakage_guard_reads_eval_papers_from_new_split_schema(env):
     with pytest.raises(build_dataset.LeakageError):
         build_dataset.build(**_build_kwargs(env, expected_corpus_sha256=sha256, expected_corpus_rows=rows_n))
     assert not env["output_dir"].exists()
+
+
+# --- 10. dataset v2: weight policies through the full build() ---------------------
+# Pure-function policy tests live in test_weight_policy.py; these exercise
+# the ORCHESTRATED path: policy applied after dedupe, manifest audit block,
+# per-uid counts, disk re-verification, and determinism per policy.
+# TRAIN_SPECS n_correct per uid: u0=1, u1=2, u2=1, u3=1, u4=1 (6 rows uncapped).
+
+
+def test_build_cap1_one_row_per_uid_and_manifest_block(env):
+    manifest = build_dataset.build(**_build_kwargs(env, weight_policy="cap1"))
+
+    assert manifest["dataset"]["rows"] == len(env["train_uids"])  # 5: one per uid
+    per_uid = manifest["dataset"]["per_uid_trace_counts"]
+    assert per_uid == {"u0": 1, "u1": 1, "u2": 1, "u3": 1, "u4": 1}
+
+    block = manifest["weight_policy"]
+    assert block["policy"] == "cap1"
+    assert block["label"] == "cap1"
+    assert block["rows_before"] == HAPPY_PATH_N_EXAMPLES
+    assert block["rows_after"] == 5
+    assert block["seed"] == env["seed"]
+    assert "sha256" in block["selection_rule"]  # the documented seeded rule
+    assert block["rows_per_uid_before"] == {"1": 4, "2": 1}
+    assert block["rows_per_uid_after"] == {"1": 5}
+
+    rows = [
+        json.loads(line)
+        for line in Path(manifest["dataset"]["path"]).read_text(encoding="utf-8").splitlines()
+    ]
+    assert all("weight" not in row for row in rows)
+    # u1's kept trace follows the documented selection rule, recomputed here.
+    u1_kept = next(r for r in rows if r["provenance"]["uid"] == "u1")
+    expected = min(
+        ("u1-r00", "u1-r01"),
+        key=lambda r: hashlib.sha256(f"{env['seed']}:u1:{r}".encode()).hexdigest(),
+    )
+    assert u1_kept["provenance"]["rollout_uid"] == expected
+
+
+def test_build_capk_manifest_label_and_counts(env):
+    manifest = build_dataset.build(
+        **_build_kwargs(env, weight_policy="capk", weight_policy_cap_k=2)
+    )
+    # k=2 covers every uid's full trace set here, so nothing is dropped --
+    # the policy still runs, stamps its block, and re-verifies.
+    assert manifest["dataset"]["rows"] == HAPPY_PATH_N_EXAMPLES
+    block = manifest["weight_policy"]
+    assert block["policy"] == "capk"
+    assert block["cap_k"] == 2
+    assert block["label"] == "cap2"
+    assert block["rows_after"] == HAPPY_PATH_N_EXAMPLES
+
+
+def test_build_inverse_writes_exact_reciprocal_weights(env):
+    manifest = build_dataset.build(**_build_kwargs(env, weight_policy="inverse"))
+
+    assert manifest["dataset"]["rows"] == HAPPY_PATH_N_EXAMPLES  # nothing dropped
+    assert manifest["weight_policy"]["weighted"] is True
+
+    rows = [
+        json.loads(line)
+        for line in Path(manifest["dataset"]["path"]).read_text(encoding="utf-8").splitlines()
+    ]
+    n_correct = {"u0": 1, "u1": 2, "u2": 1, "u3": 1, "u4": 1}
+    for row in rows:
+        uid = row["provenance"]["uid"]
+        assert row["weight"] == 1.0 / n_correct[uid]  # exact, JSON-round-tripped
+
+
+def test_build_unknown_policy_refuses_and_writes_nothing(env):
+    with pytest.raises(build_dataset.WeightPolicyError):
+        build_dataset.build(**_build_kwargs(env, weight_policy="capzero"))
+    assert not env["output_dir"].exists()
+
+
+def test_build_determinism_per_policy(env):
+    for policy in ("cap1", "inverse"):
+        m1 = build_dataset.build(
+            **_build_kwargs(
+                env, weight_policy=policy, output_dir=env["tmp_path"] / f"b1_{policy}"
+            )
+        )
+        m2 = build_dataset.build(
+            **_build_kwargs(
+                env, weight_policy=policy, output_dir=env["tmp_path"] / f"b2_{policy}"
+            )
+        )
+        assert Path(m1["dataset"]["path"]).read_bytes() == Path(m2["dataset"]["path"]).read_bytes()
+
+
+def test_build_manifest_echoes_trainer_hyperparams(env):
+    # The formerly-silent four (grad-accum literal + inherited SFTConfig
+    # defaults) must be visible in the dataset manifest (work order
+    # 2026-07-29, "ALSO FIX").
+    manifest = build_dataset.build(**_build_kwargs(env))
+    echoed = manifest["trainer_hyperparams"]
+    assert echoed["grad_accum_steps"] == config.GRAD_ACCUM_STEPS == 4
+    assert echoed["lr_scheduler_type"] == config.LR_SCHEDULER_TYPE == "linear"
+    assert echoed["warmup_ratio"] == config.WARMUP_RATIO == 0.0
+    assert echoed["weight_decay"] == config.WEIGHT_DECAY == 0.0
+    assert echoed["completion_only_loss"] is True
+    assert manifest["sft_schema"]["format"] == "prompt_completion"
+    assert manifest["sft_schema"]["version"] == 2
+    assert manifest["guards"] == list(build_dataset.BUILD_GUARD_STEPS)
+    assert "apply_weight_policy" in manifest["guards"]
+
+
+def test_main_weight_policy_flag_overrides_config_default(env, monkeypatch, capsys):
+    monkeypatch.setattr(config, "EXPECTED_CORPUS_SHA256", env["expected_corpus_sha256"])
+    monkeypatch.setattr(config, "EXPECTED_CORPUS_ROWS", env["expected_corpus_rows"])
+    monkeypatch.setattr(config, "EXPECTED_SPLIT_SHA256", env["expected_split_sha256"])
+    monkeypatch.setattr(config, "BACKFILL_TRACE_SOURCES", env["backfill_trace_sources"])
+    monkeypatch.setattr(config, "SEED", env["seed"])
+
+    rc = build_dataset.main(
+        [
+            "--corpus", str(env["corpus_path"]),
+            "--split", str(env["split_path"]),
+            "--train-uids", str(env["train_uids_path"]),
+            "--eval-set", str(env["eval_set_path"]),
+            "--output-dir", str(env["output_dir"]),
+            "--repo-root", str(env["repo_root"]),
+            "--weight-policy", "inverse",
+        ]
+    )
+    assert rc == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["weight_policy"]["policy"] == "inverse"
+    assert summary["rows"] == HAPPY_PATH_N_EXAMPLES
+    rows = [
+        json.loads(line)
+        for line in (env["output_dir"] / "sft_train.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(row.get("weight") == 0.5 for row in rows)  # u1's two traces

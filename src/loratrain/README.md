@@ -10,7 +10,8 @@ HP screen. Final verdict: `docs/lora_consistency_verdict.md` — holdout effect
 at n=12 seeds** (the interim n=8 significance did not survive its pre-registered
 extension). Next experiment (Nicky-gated): dataset v2 with completion-only masking
 (`docs/lora_decisions_2026-07-28.md` D5). The module remains the reusable training
-arm for that round.
+arm for that round. **Dataset v2 is BUILT and mask-proven as of 2026-07-29** (see
+"Dataset v2" below) -- training on it stays gated on Nicky.
 Sub-repo, same pattern as `evalharness/` and `src/posers/*`: own `pyproject.toml`,
 stdlib-only, zero import dependency on icepick. This module **trains**; it never
 measures. Measurement belongs exclusively to `evalharness/` (design authority:
@@ -144,6 +145,46 @@ answer)` pairs are **not used at all**. Residual risk stated honestly: RFT still
 upweights the model's own verifier-friendly styles; acceptable because both
 arms are scored by the identical verifier and equivalence rules, paired per
 record (McNemar).
+
+## Dataset v2 (2026-07-29) — the two-defect fix; build+test done, training gated
+
+The 2026-07-28 external reviews found two structural defects in how the v1
+dataset taught the model (`docs/lora_params_rationale.md` §1, last row):
+
+- **Defect 1 — full-sequence loss.** v1 rows were a single `messages` list the
+  box pre-templated into one string: a language-modeling dataset, so SFTTrainer
+  computed loss over prompt tokens too (measured 21.6% of trained characters,
+  23.8% of trained tokens, were system/user text — the same system prompt in
+  all 700 rows). **Fix:** v2 rows carry `prompt` (system+user) and `completion`
+  (verbatim assistant) message columns; in the pinned trl 0.29.1 that dataset
+  type gets completion-only loss by default, and the trainer sets
+  `completion_only_loss=True` explicitly. trl renders prompt+completion through
+  the same chat template v1 used, so the total rendered text (and token ids)
+  are byte-identical to v1's — the loss mask is the only train-time delta
+  (proven at decode level, all 200 rows, 2026-07-29). `assistant_only_loss` is
+  not usable: Qwen3's template lacks `{% generation %}` tags.
+- **Defect 2 — gradient weight == n_correct.** One row per verified-correct
+  trace meant a record's gradient mass equaled how often the BASE model already
+  solved it (anti-difficulty; hardest records 1/7 the weight of near-ceiling
+  ones). **Fix:** `config.WEIGHT_POLICY` knob — `cap1` (default; one seeded-
+  deterministically-selected trace per uid, 200 rows), `capk` (≤k rows/uid),
+  `inverse` (all 700 rows, per-row `weight = 1/n_correct`, honored by the
+  trainer's weighted-loss path). Which policy ships is Nicky's decision; all
+  are built under `data/v2/<label>/` (cap1 200 / cap2 362 / cap3 487 /
+  inverse 700 rows). v1 artifacts (`data/run1_final/**`, `data/sft_train.jsonl`)
+  are untouched byte-identical baselines.
+
+Same change-set: the four formerly-silent trainer knobs (`grad_accum_steps=4`
+hardcoded literal; `lr_scheduler_type=linear`/`warmup_ratio=0.0`/
+`weight_decay=0.0` inherited SFTConfig defaults) are pinned in `config.py`,
+spelled explicitly in the box trainer, and echoed into `run_config.json` +
+`dataset_manifest.json` (`trainer_hyperparams`) — values unchanged from what
+v1 actually ran, so v1↔v2 stays comparable. `config.SFT_DATASET_PATH` now
+tracks the v2 policy-labeled build (what upload_guard ships when W3 reopens).
+New guards: prompt/completion well-formedness + wire-format pins, per-uid cap
+honored / exact 1/n weights (re-checked from disk post-write), and a refusal
+on `<think>`/`</think>` inside targets (latent template-rewrite hazard, 0/700
+affected today).
 
 ## Split & corpus: the ruled 200/100 split (SUPERSEDED SECTION — updated 2026-07-26)
 

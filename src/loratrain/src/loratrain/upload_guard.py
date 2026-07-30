@@ -206,7 +206,10 @@ def write_run_config(path) -> None:
     carries them across the wire.
     """
     payload = {
-        "seeds": [config.SEED, config.SEED + 1, config.SEED + 2],
+        # Explicit list from config (v2, 2026-07-30). Was
+        # [SEED, SEED+1, SEED+2] -- capped the campaign at 3 seeds and broke
+        # across month boundaries; see config.SEEDS for the pinned control set.
+        "seeds": list(config.SEEDS),
         "hyperparams": {
             "rank": config.LORA_RANK,
             "alpha": config.LORA_ALPHA,
@@ -215,7 +218,21 @@ def write_run_config(path) -> None:
             "epochs": config.EPOCHS,
             "micro_batch_size": config.MICRO_BATCH_SIZE,
             "max_seq_len": config.MAX_SEQ_LEN,
+            # v2 pins (2026-07-29): explicit and recorded. In v1 these were a
+            # hardcoded literal (grad-accum) + silent SFTConfig defaults
+            # (scheduler/warmup/weight-decay), invisible to every manifest.
+            "grad_accum_steps": config.GRAD_ACCUM_STEPS,
+            "lr_scheduler_type": config.LR_SCHEDULER_TYPE,
+            "warmup_ratio": config.WARMUP_RATIO,
+            "weight_decay": config.WEIGHT_DECAY,
         },
+        # Dataset v2 contract markers (2026-07-29): which weight policy this
+        # run's dataset was built under, and that the box-side trainer must
+        # run its prompt/completion completion-only-loss path.
+        "weight_policy": config.WEIGHT_POLICY,
+        "weight_policy_label": config.weight_policy_label(),
+        "dataset_schema": "prompt_completion.v2",
+        "completion_only_loss": True,
         "base_model": config.BASE_MODEL_HF_ID,
         "base_model_revision": verify_base_identity.FP16_REVISION,
         "adapter_format": config.ADAPTER_FORMAT,

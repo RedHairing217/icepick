@@ -45,9 +45,9 @@ from pathlib import Path
 # fails the suite if it finds one -- so there is nowhere else to put it.
 # ============================================================================
 
-TRAIN_SERVER_IP = "69.30.85.138"   # <-- EDIT HERE: the pod's public IP -- the ssh/scp target and NOTHING else (single source of truth)
+TRAIN_SERVER_IP = "69.30.85.67"   # <-- EDIT HERE: the pod's public IP -- the ssh/scp target and NOTHING else (single source of truth). Set 2026-07-30 for the v2 box (pod b3njpwlrpbzh26, CA-MTL-1). RESET to the 127.0.0.1 placeholder at RUNBOOK section 9 teardown -- RunPod reassigns IPs to other tenants, so a dead address must never linger here.
 TRAIN_SERVER_PORT = 8000        # M4-LOCAL end of the section 6 status tunnel; edit only if local 8000 is occupied
-TRAIN_SERVER_SSH_PORT = 22092   # <-- EDIT HERE when provisioning: the pod's external TCP port mapped to container 22
+TRAIN_SERVER_SSH_PORT = 22174   # <-- EDIT HERE when provisioning: the pod's external TCP port mapped to container 22. Set 2026-07-30. NOTE: RunPod reassigns this mapping on every container recreate (observed 22117 -> 22145 -> 22174 across one restart) -- re-read it from the pod and update here after any stop/start/restart, or ssh/scp/tunnel all fail with "connection refused".
 TRAIN_SERVER_URL = f"http://127.0.0.1:{TRAIN_SERVER_PORT}"  # derived, tunnel-local -- what the operator curls while the section 6 tunnel is up; never carries the pod IP; never edit this line
 TRAIN_SERVER_KEY_FILE = None  # optional path proxy to a bearer-key file (raw token or KEY=VALUE); None = keyless; contents never printed/logged
 
@@ -134,6 +134,28 @@ PASS_AT_K_NO_THINK_SUFFIX = " /no_think"  # pinned 2026-07-25 (leading space is 
 
 SEED = 20260722
 
+# --- Training seed set (v2 campaign, 2026-07-30) -------------------------------
+# SEED (above) is the DATASET seed: build_dataset.apply_weight_policy ranks each
+# uid's traces by sha256("{seed}:{uid}:{rollout_uid}"), so changing it reshuffles
+# which traces cap1 keeps. It stays pinned to the value
+# data/v2/*/dataset_manifest.json was already built under -- never retune it to
+# add training seeds.
+#
+# SEEDS is the TRAINING seed list run_config.json ships to the box, one adapter
+# per entry. v1's upload_guard derived this as [SEED, SEED+1, SEED+2], which both
+# capped a campaign at 3 seeds and breaks across month boundaries (20260731 + 1 =
+# 20260732, not 20260801) -- v1's 12 control seeds were in fact assembled across
+# three separate runs, never from that expression. Pinned here as the explicit v1
+# control set so v2 is seed-PAIRED with v1 and the measured per-seed sd of 3.45pp
+# works for the comparison instead of against it. 20260728 is deliberately
+# ABSENT: it was the stage-A HP screen's shared seed on a 160-record subset, not
+# a control seed (docs/lora_campaign_results.md).
+SEEDS = [
+    20260722, 20260723, 20260724,                      # run-1 (2026-07-26/27)
+    20260725, 20260726, 20260727, 20260729, 20260730,  # stage R
+    20260731, 20260801, 20260802, 20260803,            # D2 extension
+]
+
 # --- Hyperparameters ---------------------------------------------------------
 # Conventional starting points, not tuned -- W3 review (README "Open items").
 LORA_RANK = 16
@@ -143,6 +165,56 @@ LEARNING_RATE = 1e-4
 EPOCHS = 3
 MICRO_BATCH_SIZE = 4
 MAX_SEQ_LEN = 4096
+
+# --- Trainer schedule/accumulation pins (v2, 2026-07-29) ----------------------
+# In v1 these four were INVISIBLE: grad-accum was a hardcoded literal at
+# remote/train_qwen3_lora.py:131 and the other three were silent SFTConfig
+# defaults, none recorded in any run manifest (found by the 2026-07-28
+# unbriefed external reviews -- docs/lora_params_rationale.md section 1).
+# The VALUES are deliberately unchanged from what v1 actually ran (effective
+# batch 16 = 4 micro x 4 accum; linear decay to 0; no warmup; no weight
+# decay) so v1<->v2 comparisons isolate the dataset fix -- these pins make
+# them visible and manifest-recorded, not different.
+GRAD_ACCUM_STEPS = 4
+LR_SCHEDULER_TYPE = "linear"
+WARMUP_RATIO = 0.0
+WEIGHT_DECAY = 0.0
+
+# --- Dataset v2 weight policy (defect 2: gradient weight == n_correct) --------
+# v1 emitted one SFT row per verified-correct trace, so a record's gradient
+# mass equaled how often the BASE model already solved it (rows-per-uid
+# histogram {1:38, 2:37, 3:29, 4:24, 5:34, 6:31, 7:7} over 200 uids / 700
+# rows) -- anti-difficulty weighting: the hardest band records got 1/7 the
+# weight of near-ceiling ones. WEIGHT_POLICY caps/reweights that:
+#   "cap1"    -- one trace per uid (default; 200 rows at N=200)
+#   "capk"    -- at most WEIGHT_POLICY_CAP_K traces per uid
+#   "inverse" -- keep every trace, stamp each row with weight = 1/n_traces
+#                so each uid's total gradient mass is equal (requires the
+#                trainer's weighted-loss path; rows gain a "weight" field)
+# Which policy SHIPS is Nicky's decision (work order 2026-07-29) -- all three
+# are implemented; this default is the build default, not the ruling.
+# Trace selection under the cap policies is deterministic by seed --
+# build_dataset.apply_weight_policy ranks each uid's traces by
+# sha256("{seed}:{uid}:{rollout_uid}") and keeps the first cap -- never a
+# silent "first N by file order"; the rule is echoed into the manifest.
+WEIGHT_POLICY = "cap1"
+WEIGHT_POLICY_CAP_K = 3  # only read when WEIGHT_POLICY == "capk"
+VALID_WEIGHT_POLICIES = ("cap1", "capk", "inverse")
+
+
+def weight_policy_label(policy=None, cap_k=None) -> str:
+    """Directory/report label for a weight policy: cap1 | cap<k> | inverse.
+
+    Defaults to the module-level knobs. Pure string derivation -- no
+    validation here (``validate_config()`` owns that), so importing this
+    module with a bad knob still lets validate_config report the full
+    problem list instead of crashing at import time.
+    """
+    policy = WEIGHT_POLICY if policy is None else policy
+    cap_k = WEIGHT_POLICY_CAP_K if cap_k is None else cap_k
+    if policy == "capk":
+        return f"cap{cap_k}"
+    return str(policy)
 
 # --- Paths --------------------------------------------------------------------
 # config.py sits at icepick/src/loratrain/src/loratrain/config.py, so
@@ -165,8 +237,16 @@ EVAL_SET_PATH = REPO_ROOT / "evalharness/data/eval_set.jsonl"        # same
 BASELINE_GREEDY_PATH = REPO_ROOT / "out/evalharness/run1/baseline_greedy.jsonl"  # the eval run dir the operator captures the baseline into
 
 DATA_DIR = SUBREPO_ROOT / "data"
-SFT_DATASET_PATH = DATA_DIR / "sft_train.jsonl"
-DATASET_MANIFEST_PATH = DATA_DIR / "dataset_manifest.json"
+# Dataset v2 (2026-07-29): builds land under data/v2/<policy-label>/ so the
+# v1 artifacts (data/sft_train.jsonl and data/run1_final/**, the run-1
+# comparison baseline) are never overwritten. SFT_DATASET_PATH /
+# DATASET_MANIFEST_PATH -- what upload_guard validates and ships when W3
+# reopens -- now track the CURRENT (v2, policy-labeled) build; leaving them
+# on the v1 file would silently upload the defective-recipe dataset, the
+# exact silent-default failure mode this revision removes.
+DATA_V2_DIR = DATA_DIR / "v2"
+SFT_DATASET_PATH = DATA_V2_DIR / weight_policy_label() / "sft_train.jsonl"
+DATASET_MANIFEST_PATH = DATA_V2_DIR / weight_policy_label() / "dataset_manifest.json"
 ADAPTER_DIR = DATA_DIR / "adapter"
 RUN_MANIFEST_PATH = DATA_DIR / "run_manifest.json"
 
@@ -275,9 +355,35 @@ def validate_config() -> None:
         ("EPOCHS", EPOCHS),
         ("MICRO_BATCH_SIZE", MICRO_BATCH_SIZE),
         ("MAX_SEQ_LEN", MAX_SEQ_LEN),
+        ("GRAD_ACCUM_STEPS", GRAD_ACCUM_STEPS),
+        ("WEIGHT_POLICY_CAP_K", WEIGHT_POLICY_CAP_K),
     ):
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             problems.append(f"{name} must be a positive int (got {value!r})")
+
+    if not isinstance(LR_SCHEDULER_TYPE, str) or not LR_SCHEDULER_TYPE:
+        problems.append(
+            f"LR_SCHEDULER_TYPE must be a non-empty str (got {LR_SCHEDULER_TYPE!r})"
+        )
+
+    if (
+        not isinstance(WARMUP_RATIO, (int, float))
+        or isinstance(WARMUP_RATIO, bool)
+        or not (0 <= WARMUP_RATIO < 1)
+    ):
+        problems.append(f"WARMUP_RATIO must satisfy 0 <= WARMUP_RATIO < 1 (got {WARMUP_RATIO!r})")
+
+    if (
+        not isinstance(WEIGHT_DECAY, (int, float))
+        or isinstance(WEIGHT_DECAY, bool)
+        or WEIGHT_DECAY < 0
+    ):
+        problems.append(f"WEIGHT_DECAY must be a non-negative number (got {WEIGHT_DECAY!r})")
+
+    if WEIGHT_POLICY not in VALID_WEIGHT_POLICIES:
+        problems.append(
+            f"WEIGHT_POLICY must be one of {VALID_WEIGHT_POLICIES} (got {WEIGHT_POLICY!r})"
+        )
 
     if (
         not isinstance(LORA_DROPOUT, (int, float))
@@ -295,6 +401,18 @@ def validate_config() -> None:
 
     if not isinstance(SEED, int) or isinstance(SEED, bool) or SEED <= 0:
         problems.append(f"SEED must be a positive int (got {SEED!r})")
+
+    # SEEDS ships to the box as run_config.json's seed loop -- a malformed or
+    # duplicate-bearing list would silently train fewer adapters than the
+    # campaign claims, so it fails here rather than on the box.
+    if not isinstance(SEEDS, (list, tuple)) or not SEEDS:
+        problems.append(f"SEEDS must be a non-empty list of ints (got {SEEDS!r})")
+    else:
+        bad = [s for s in SEEDS if not isinstance(s, int) or isinstance(s, bool) or s <= 0]
+        if bad:
+            problems.append(f"every SEEDS entry must be a positive int (got {bad!r})")
+        if len(set(SEEDS)) != len(SEEDS):
+            problems.append(f"SEEDS contains duplicates (got {SEEDS!r})")
 
     # --- pins ----------------------------------------------------------------------
     if not isinstance(EXPECTED_CORPUS_SHA256, str) or not _SHA256_RE.match(EXPECTED_CORPUS_SHA256):

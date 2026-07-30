@@ -82,7 +82,16 @@ def build_job_payload(dataset_path: Path, baseline_sha256: str) -> dict:
             "epochs": config.EPOCHS,
             "micro_batch_size": config.MICRO_BATCH_SIZE,
             "max_seq_len": config.MAX_SEQ_LEN,
+            # v2 pins (2026-07-29) -- see upload_guard.write_run_config.
+            "grad_accum_steps": config.GRAD_ACCUM_STEPS,
+            "lr_scheduler_type": config.LR_SCHEDULER_TYPE,
+            "warmup_ratio": config.WARMUP_RATIO,
+            "weight_decay": config.WEIGHT_DECAY,
         },
+        "weight_policy": config.WEIGHT_POLICY,
+        "weight_policy_label": config.weight_policy_label(),
+        "dataset_schema": "prompt_completion.v2",
+        "completion_only_loss": True,
     }
 
 

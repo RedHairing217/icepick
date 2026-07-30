@@ -61,7 +61,17 @@ def test_build_job_payload_embeds_sha_and_hyperparams(tmp_path):
         "epochs": config.EPOCHS,
         "micro_batch_size": config.MICRO_BATCH_SIZE,
         "max_seq_len": config.MAX_SEQ_LEN,
+        # v2 pins (2026-07-29): the formerly-silent four, now explicit.
+        "grad_accum_steps": config.GRAD_ACCUM_STEPS,
+        "lr_scheduler_type": config.LR_SCHEDULER_TYPE,
+        "warmup_ratio": config.WARMUP_RATIO,
+        "weight_decay": config.WEIGHT_DECAY,
     }
+    # Dataset v2 contract markers ride in the payload too.
+    assert payload["weight_policy"] == config.WEIGHT_POLICY
+    assert payload["weight_policy_label"] == config.weight_policy_label()
+    assert payload["dataset_schema"] == "prompt_completion.v2"
+    assert payload["completion_only_loss"] is True
 
 
 def test_submit_job_raises_notimplemented_with_derived_url():
