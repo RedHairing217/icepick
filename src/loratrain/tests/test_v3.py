@@ -891,3 +891,75 @@ def test_cli_solutions_flag_has_no_default_no_globbing():
         solutions_action = next(a for a in subparser._actions if a.dest == "solutions")
         assert solutions_action.required is True
         assert solutions_action.default is None
+
+
+# ============================================================================
+# 12. sha-chain tolerance PINNED against the REAL proof-import publish shape
+#     (out/proof_import_20260731T185338Z, 2026-07-31): manifest records INPUT
+#     shas only (input_shas.*, 16-hex prefixes) and never the published
+#     file's own sha -- that lives in a stem-named sha sidecar (the lane's
+#     bundle.sha256 idiom). These tests keep the tolerance from regressing
+#     to the pre-publish guesswork.
+# ============================================================================
+
+
+def _as_real_publish_shape(env, sidecar_name=None, sidecar_sha=None):
+    """Rewrite env's manifest into the real publish shape (input_shas only,
+    16-hex split prefix, NO solutions sha) and optionally write a sha
+    sidecar beside the solutions file."""
+    _write_json(env["manifest_path"], {
+        "input_shas": {"split": env["expected_split_sha256"][:16]},
+        "censuses": {"p5": {"verified_published": 3}},
+        "spend": {},
+    })
+    if sidecar_name is not None:
+        sha = env["solutions_sha256"] if sidecar_sha is None else sidecar_sha
+        (env["solutions_path"].parent / sidecar_name).write_text(
+            f"{sha}  {env['solutions_path'].name}\n", encoding="utf-8"
+        )
+
+
+def test_real_publish_shape_stem_sidecar_and_input_shas_split_accepted(env):
+    _as_real_publish_shape(env, sidecar_name="solutions_v3.sha256")
+    _make_bundle(env)
+    assert (env["bundle_dir"] / "regen_bundle.jsonl").exists()
+
+
+def test_real_publish_shape_jsonl_suffixed_sidecar_accepted(env):
+    _as_real_publish_shape(env, sidecar_name="solutions_v3.jsonl.sha256")
+    _make_bundle(env)
+    assert (env["bundle_dir"] / "regen_bundle.jsonl").exists()
+
+
+def test_real_publish_shape_no_sidecar_refuses(env):
+    _as_real_publish_shape(env, sidecar_name=None)
+    with pytest.raises(v3.SolutionsIntegrityError, match="no sha sidecar"):
+        _make_bundle(env)
+
+
+def test_sidecar_wrong_sha_refuses(env):
+    _as_real_publish_shape(env, sidecar_name="solutions_v3.sha256", sidecar_sha="0" * 64)
+    with pytest.raises(v3.SolutionsIntegrityError, match="[Ss]ha-chain broken"):
+        _make_bundle(env)
+
+
+def test_manifest_input_shas_16hex_prefix_accepted(env):
+    _write_json(env["manifest_path"], {
+        "input_shas": {
+            "solutions_v3": env["solutions_sha256"][:16],
+            "split": env["expected_split_sha256"][:16],
+        },
+    })
+    _make_bundle(env)
+    assert (env["bundle_dir"] / "regen_bundle.jsonl").exists()
+
+
+def test_recorded_prefix_shorter_than_16_hex_refuses(env):
+    _write_json(env["manifest_path"], {
+        "input_shas": {
+            "solutions_v3": env["solutions_sha256"][:12],
+            "split": env["expected_split_sha256"][:16],
+        },
+    })
+    with pytest.raises(v3.SolutionsIntegrityError, match="too short to pin|Sha-chain broken"):
+        _make_bundle(env)

@@ -33,19 +33,25 @@ build it, does not glob for it, and hard-refuses when it is absent)::
          provenance: {arxiv_id, match_method, match_confidence,
                        sonnet_cache_key, verified: true}}
         `question` == the record's wire statement. 100% endpoint-verified.
-    manifest.json         sibling of solutions_v3.jsonl: input shas
-                           (including a recorded solutions_v3.jsonl sha256
-                           and the split's sha), censuses, spend. This
-                           module tolerantly looks up the solutions sha
-                           under ``solutions_v3.sha256`` / flat
-                           ``solutions_sha256`` / ``sha256``, and the split
-                           sha under ``split.sha256`` / ``split_sha256`` /
-                           ``split_sha16`` (mirrors ``upload_guard.
-                           _check_manifest_corpus_sha``'s tolerant-lookup
-                           idiom for a producer maintained by a different,
-                           independently-evolving lane) -- and hard-refuses
-                           if the recomputed solutions sha or the pinned
-                           split sha do not match what is recorded.
+    manifest.json         sibling of solutions_v3.jsonl: INPUT shas,
+                           censuses, spend. PINNED against the first real
+                           publish (out/proof_import_20260731T185338Z,
+                           2026-07-31): the real manifest records input
+                           shas only -- ``input_shas.split`` etc., as
+                           16-hex PREFIXES -- and does NOT record the
+                           published file's own sha; the lane records
+                           output shas via stem-named sidecars instead
+                           (its ``bundle.sha256`` idiom). This module
+                           looks up the solutions sha under
+                           ``solutions_v3.sha256`` / ``solutions_sha256``
+                           / ``sha256`` / ``input_shas.solutions_v3``,
+                           falling back to a ``solutions_v3.sha256`` or
+                           ``solutions_v3.jsonl.sha256`` sidecar beside
+                           the file; the split sha under ``split.sha256``
+                           / ``split_sha256`` / ``split_sha16`` /
+                           ``input_shas.split``. Recorded values may be
+                           >=16-hex prefixes of the full sha256; anything
+                           shorter, non-hex, or mismatched hard-refuses.
 
 Two subcommands
 ================
@@ -180,11 +186,11 @@ author filed alongside it):
      label fallback, off-tier exclusion) -- orchestrator-ruled (2026-07-31,
      from a completed inventory cross-check), not this module's own call; see
      ``resolve_hinted_tier``'s docstring.
-  4. The manifest.json field-name tolerance list (above) -- an inference
-     from CONTRACTS.md's prose plus ``inventory.json``'s sibling field
-     names, since the proof-import lane had not published a manifest.json
-     at the time this module was written; verify against the first real
-     one.
+  4. The manifest.json field-name tolerance list (above) -- originally an
+     inference from CONTRACTS.md's prose (the lane had not published yet);
+     VERIFIED AND PINNED 2026-07-31 against the first real publish:
+     ``input_shas.*`` 16-hex prefixes, no published-file sha in the
+     manifest, stem-named sha sidecar for outputs instead.
   5. Restartability's exact ``--force-new-dir`` semantics -- this module's
      own design (the brief named the flag but not its precise behavior);
      documented above and in ``_resolve_publish_dir``.
@@ -367,11 +373,38 @@ def load_solutions_manifest(manifest_path: Path) -> dict:
     return manifest
 
 
+# Manifest key paths / sidecar names for the solutions sha -- PINNED against
+# the first real proof-import publish (out/proof_import_20260731T185338Z,
+# 2026-07-31): its manifest.json records INPUT shas only (16-hex prefixes,
+# e.g. input_shas.split) and never the published file's own sha, which the
+# lane instead records via a stem-named sha sidecar (its bundle.sha256
+# idiom: "<hex>  <filename>").
+MANIFEST_SOLUTIONS_SHA_PATHS = (
+    "solutions_v3.sha256", "solutions_sha256", "sha256", "input_shas.solutions_v3",
+)
+SOLUTIONS_SHA_SIDECAR_NAMES = ("solutions_v3.sha256", "solutions_v3.jsonl.sha256")
+
+
+def _recorded_sha_matches(recorded, recomputed: str) -> bool:
+    """True iff ``recorded`` is a >=16-char hex PREFIX of ``recomputed``.
+    The real publish records 16-hex prefixes; fixtures record full 64-hex,
+    which is trivially its own prefix. Anything shorter than 16 hex chars
+    is too weak to pin and is rejected.
+    """
+    rec = str(recorded).strip().lower()
+    return (
+        len(rec) >= 16
+        and all(c in "0123456789abcdef" for c in rec)
+        and recomputed.startswith(rec)
+    )
+
+
 def assert_solutions_sha_chain(solutions_path: Path, manifest_path: Path, manifest: dict) -> str:
     """Hard-refuse unless ``solutions_path`` exists and its recomputed
-    sha256 matches the value ``manifest`` records for it. Returns the
-    recomputed sha256 on success. Tolerant key lookup (see module
-    docstring's field-name-tolerance note).
+    sha256 matches what the manifest -- or, failing that, a sha sidecar
+    beside the solutions file -- records for it (>=16-hex-prefix
+    semantics, ``_recorded_sha_matches``). Returns the recomputed full
+    sha256 on success.
     """
     solutions_path = Path(solutions_path)
     if not solutions_path.exists():
@@ -381,19 +414,33 @@ def assert_solutions_sha_chain(solutions_path: Path, manifest_path: Path, manife
             "'Hard dependency'). This builder refuses to run without it."
         )
     recomputed = build_dataset.sha256_file(solutions_path)
-    recorded = _lookup_first(manifest, "solutions_v3.sha256", "solutions_sha256", "sha256")
+    recorded = _lookup_first(manifest, *MANIFEST_SOLUTIONS_SHA_PATHS)
+    source = manifest_path
+    if recorded is None:
+        for name in SOLUTIONS_SHA_SIDECAR_NAMES:
+            cand = solutions_path.parent / name
+            if cand.exists():
+                tokens = cand.read_text(encoding="utf-8").split()
+                if tokens:
+                    recorded = tokens[0]
+                    source = cand
+                    break
     if recorded is None:
         raise SolutionsIntegrityError(
             f"{manifest_path}: no solutions sha recorded (looked for "
-            "solutions_v3.sha256 / solutions_sha256 / sha256) -- manifest "
-            "malformed, refusing to trust an unverifiable solutions file."
+            + " / ".join(MANIFEST_SOLUTIONS_SHA_PATHS)
+            + ") and no sha sidecar ("
+            + " / ".join(SOLUTIONS_SHA_SIDECAR_NAMES)
+            + ") beside the solutions file -- refusing to trust an "
+            "unverifiable solutions file."
         )
-    if recorded != recomputed:
+    if not _recorded_sha_matches(recorded, recomputed):
         raise SolutionsIntegrityError(
-            f"{solutions_path} sha256={recomputed[:16]} != manifest-recorded "
-            f"{str(recorded)[:16]} ({manifest_path}) -- the solutions file "
-            "moved (or the manifest is stale) since publish; sha-chain "
-            "broken, refusing."
+            f"{solutions_path} sha256={recomputed[:16]} != recorded "
+            f"{str(recorded)[:16]} ({source}) -- recorded value must be a "
+            ">=16-hex prefix of the recomputed sha; the solutions file "
+            "moved, the record is stale, or the record is too short to pin. "
+            "Sha-chain broken, refusing."
         )
     return recomputed
 
@@ -402,11 +449,11 @@ def assert_manifest_split_pin(manifest: dict, manifest_path: Path, expected_spli
     """Hard-refuse unless the manifest's recorded split sha (16-hex,
     tolerant lookup) matches the pinned split's sha16.
     """
-    recorded = _lookup_first(manifest, "split.sha256", "split_sha256", "split_sha16")
+    recorded = _lookup_first(manifest, "split.sha256", "split_sha256", "split_sha16", "input_shas.split")
     if recorded is None:
         raise SolutionsIntegrityError(
             f"{manifest_path}: no split sha recorded (looked for split.sha256 "
-            "/ split_sha256 / split_sha16) -- manifest malformed."
+            "/ split_sha256 / split_sha16 / input_shas.split) -- manifest malformed."
         )
     recorded16 = str(recorded)[:16]
     if recorded16 != expected_split_sha16:
