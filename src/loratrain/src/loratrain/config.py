@@ -510,3 +510,99 @@ def validate_config() -> None:
             f"{len(problems)} configuration problem(s) in loratrain/config.py:\n"
             + "\n".join(f"  - {p}" for p in problems)
         )
+
+
+# ============================================================================
+# V3 (proof-hint arm) constants -- ADDITIVE ONLY (docs/lora_v3_proofhint_
+# execution_skeleton.md), appended 2026-07-31. Consumed exclusively by
+# loratrain.v3 (src/loratrain/src/loratrain/v3.py); nothing above this
+# banner is touched, reverted, or reformatted by this addition, and no
+# existing module imports v3 (isolation constraint, skeleton section 0 --
+# see also v3.py's own module docstring). validate_config() above is NOT
+# extended to cover these knobs -- see v3.validate_v3_config() in the new
+# module, kept separate rather than edited into this file's existing
+# function body.
+# ============================================================================
+
+# Skeleton P1: "sample the base model ... up to k_regen=6 tries; keep the
+# FIRST candidate whose endpoint verifies". Also echoed into the regen
+# bundle's manifest so a box-side P2 consumer knows the budget it is
+# generating against.
+V3_K_REGEN = 6
+
+# Frozen copies of the pass@k generation params the regen bundle's hint
+# prompts are meant to be sampled under at P2 (box regeneration, out of
+# this module's scope -- P1 only builds prompts and records these in the
+# bundle manifest; it makes no network/model call itself). Same
+# duplication rationale as PASS_AT_K_SYSTEM_PROMPT / PASS_AT_K_NO_THINK_
+# SUFFIX above: loratrain is stdlib-only with zero icepick imports, so
+# these are pinned copies -- of icepick.processing.pass_at_k.config.
+# PassAtKConfig's temperature default (0.7) and the production pass@k
+# completion budget (RUNBOOK section 0.4 / verify_dequant_parity.
+# DEFAULT_MAX_NEW_TOKENS = 2048) -- never a live read of that config.
+V3_REGEN_TEMPERATURE = 0.7
+V3_REGEN_MAX_TOKENS = 2048
+
+# The hint-block delimiter make-regen-bundle inserts between the bare
+# statement and the paper-derived solution text (v3.py's
+# build_regen_prompt). Load-bearing as an exact literal: v3.py's hint-
+# never-in-training-prompt guard greps this exact string against every
+# FINAL training prompt and hard-fails on any hit -- the guard standing
+# between "hint at generation time only" (v3's whole premise) and a
+# silent leak into the serve-time prompt shape. Placement note
+# (orchestrator ruling, 2026-07-31, surfaced to Nicky in the window
+# report): the pinned
+# PASS_AT_K_NO_THINK_SUFFIX stays TERMINAL on the regen user turn -- i.e.
+# AFTER this marker and the solution text, not sandwiched between the
+# statement and this marker -- see v3.py's build_regen_prompt docstring
+# for the full rationale (a literal reading of the skeleton's prose would
+# have stranded the suffix mid-prompt, which the Qwen soft-switch
+# convention does not tolerate).
+V3_HINT_MARKER = "\n\nReference solution (from the source paper):\n"
+
+# R3 (release checkbox, skeleton section 1): curriculum mix. As written
+# ("60/40 collapse/band hinted rows + 25% unhinted anchor rows") the
+# arithmetic is ambiguous -- v3.py implements and documents the reading
+# "final dataset = 75% hinted (60/40 collapse/band split by source-record
+# tier) + 25% anchor", the orchestrator's 2026-07-31 arithmetic ruling
+# (surfaced to Nicky in the window report). Three independent knobs (not folded into one
+# expression) so a future re-ruling is a value edit here, not a code
+# change; the two "derived" ones are kept as their own named constants
+# purely for readability at call sites, never independently edited.
+V3_ANCHOR_FRACTION = 0.25
+V3_HINTED_FRACTION = 1.0 - V3_ANCHOR_FRACTION  # 0.75 -- derived
+V3_HINTED_COLLAPSE_FRACTION = 0.60
+V3_HINTED_BAND_FRACTION = 1.0 - V3_HINTED_COLLAPSE_FRACTION  # 0.40 -- derived
+
+# Deterministic anchor draw (R3): src/loratrain/data/v2/cap1/sft_train.jsonl
+# rows are ranked by sha256(f"{V3_ANCHOR_SEED_STRING}:{uid}") ascending --
+# same idiom as build_dataset._selection_rank / config.SEED -- so a
+# rebuild against unchanged v2/cap1 data reproduces byte-identical anchor
+# selection. Pinned like SEED; not a per-run knob.
+V3_ANCHOR_SEED_STRING = "lora-v3-proofhint:anchor-draw:v1"
+
+# R5 (release checkbox): hint-insufficient fallback (a record that
+# verifies 0/k even WITH the proof in context). "drop_and_census" is the
+# default (keeps everything on-policy); the skeleton's other listed
+# option ("include solution_text verbatim" -- off-policy contamination)
+# is deliberately NOT implemented by this builder -- out of scope until
+# Nicky rules it in.
+V3_HINT_INSUFFICIENT_POLICY = "drop_and_census"
+VALID_V3_HINT_INSUFFICIENT_POLICIES = ("drop_and_census",)
+
+# Tier-resolution fallback pool for the R3 60/40 collapse/band split
+# (orchestrator ruling, 2026-07-31, from a completed inventory
+# cross-check, surfaced to Nicky in the window report): a hinted row's tier = "band" iff its uid is in
+# band_corpus.jsonl (authoritative, takes precedence unconditionally);
+# ONLY for uids absent from band_corpus does v3.py fall back to this pool,
+# reading the NESTED `pass_at_k_results.label` field (NOT a flat
+# top-level `label` -- every one of this file's ~2021 rows has that flat
+# key absent; a flat lookup silently returns None for all of them, which
+# is exactly the trap v3.py's tests pin against). 34 known records carry
+# stale collapse/misdirection labels here after the 2026-07-15
+# gguf_rescore fold rebanded them in band_corpus without refreshing this
+# pool -- band_corpus-first precedence is what makes those resolve
+# correctly. No sha/row-count pin here (none was given, unlike the
+# corpus/split pins above) -- v3.py records this file's live sha in its
+# manifest rather than pre-pinning an unverified number.
+V3_WELLPOSED_POOL_PATH = REPO_ROOT / "out/corpus_pde625/wellposed_all_with_passk.json"
