@@ -229,3 +229,29 @@ compute paths is structurally unachievable.
 No endpoint, test, α, or exclusion rule changes. This amendment is
 variance-reducing by construction (it removes a cross-pod noise term from
 every arm-vs-base comparison that the A/A null could not have modeled).
+
+---
+
+# AMENDMENT 3 — staged execution: one seed at a time (Nicky, 2026-08-01 ~18:2xZ)
+
+Written before any arm generation or arm read. Nicky's instruction ("Let's
+focus on one seed for now / One at a time") stages EXECUTION; this amendment
+records what that does and does not change:
+
+1. Stage 1 = seed 20260901 only: trained on the unchanged 396-row hinted
+   dataset, evaluated on the unchanged 286-record eval set at k=8 (rerun-to-16
+   per the spec's boundary rules), records pod-bound per Amendment 2.
+2. The registered 12-seed primary (Amendment 1 §3) remains THE confirmatory
+   analysis and is computable only if/when all 12 seeds complete. Nothing
+   about the endpoint, test, α, or exclusion rules changes.
+3. Any number read from stage 1 before 12/12 is an INTERIM/PILOT read, labeled
+   as such wherever quoted. A single seed carries no significance machinery
+   (historical per-seed sd ≈ 3.45pp on the old instrument; the A/A null is a
+   distribution, not a threshold, at n=1). The campaign's record — interim
+   reads wrong all three times they were taken — stands as the warning.
+4. If the campaign extends to further seeds after any stage-1 read, the
+   continuation is DATA-DEPENDENT: the final analysis must disclose it, and
+   the clean options at that point are (a) exclude seed 20260901 from the
+   confirmatory set as the pilot, or (b) include it with the optional-stopping
+   caveat stated in the verdict. That choice is Nicky's, made then, recorded
+   as its own amendment.
