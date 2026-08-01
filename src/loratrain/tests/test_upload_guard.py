@@ -612,3 +612,265 @@ def test_main_dequant_scheme_verified_receipt_succeeds(env, monkeypatch):
     assert rc == 0
     produced = json.loads((env["data_dir"] / "run_config.json").read_text(encoding="utf-8"))
     assert produced["base_manifest_sha256"] == "b" * 64
+
+
+# --- Phase 1 retool (2026-08-01): per-invocation server address/port +
+# seeds-subset overrides, for running several boxes concurrently without
+# editing config.py's operator block once per box. All additive: every
+# test above this section exercises the override-free (default) path and
+# must keep passing byte-unchanged; the tests below exercise the new
+# override channels specifically. ------------------------------------------
+
+
+# resolve_server_ip ----------------------------------------------------------
+
+
+def test_resolve_server_ip_default_reproduces_config(monkeypatch):
+    monkeypatch.setattr(config, "TRAIN_SERVER_IP", "pod.example")
+    monkeypatch.delenv("TRAIN_SERVER_ADDRESS_OVERRIDE", raising=False)
+    assert upload_guard.resolve_server_ip() == "pod.example"
+
+
+def test_resolve_server_ip_env_override(monkeypatch):
+    monkeypatch.setattr(config, "TRAIN_SERVER_IP", "pod.example")
+    monkeypatch.setenv("TRAIN_SERVER_ADDRESS_OVERRIDE", "pod-b.example")
+    assert upload_guard.resolve_server_ip() == "pod-b.example"
+
+
+def test_resolve_server_ip_arg_beats_env_and_config(monkeypatch):
+    monkeypatch.setattr(config, "TRAIN_SERVER_IP", "pod.example")
+    monkeypatch.setenv("TRAIN_SERVER_ADDRESS_OVERRIDE", "pod-b.example")
+    assert upload_guard.resolve_server_ip("pod-c.example") == "pod-c.example"
+
+
+# resolve_ssh_port overrides (existing config/env-fallback tests above are
+# unchanged and still pass with override=None implicit) ---------------------
+
+
+def test_resolve_ssh_port_override_arg_beats_config(monkeypatch):
+    monkeypatch.setattr(config, "TRAIN_SERVER_SSH_PORT", 40022, raising=False)
+    monkeypatch.delenv("TRAIN_SERVER_SSH_PORT_OVERRIDE", raising=False)
+    assert upload_guard.resolve_ssh_port(50000) == 50000
+
+
+def test_resolve_ssh_port_override_env_beats_config(monkeypatch):
+    monkeypatch.setattr(config, "TRAIN_SERVER_SSH_PORT", 40022, raising=False)
+    monkeypatch.setenv("TRAIN_SERVER_SSH_PORT_OVERRIDE", "50001")
+    assert upload_guard.resolve_ssh_port() == 50001
+
+
+def test_resolve_ssh_port_override_arg_beats_env_override(monkeypatch):
+    monkeypatch.setenv("TRAIN_SERVER_SSH_PORT_OVERRIDE", "50001")
+    assert upload_guard.resolve_ssh_port(50002) == 50002
+
+
+def test_resolve_ssh_port_override_arg_invalid_refuses(monkeypatch):
+    monkeypatch.delenv("TRAIN_SERVER_SSH_PORT_OVERRIDE", raising=False)
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.resolve_ssh_port("not-a-port")
+
+
+def test_resolve_ssh_port_override_arg_out_of_range_refuses():
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.resolve_ssh_port(70000)
+
+
+# check_target with an explicit (already-resolved) address ------------------
+
+
+def test_check_target_override_ip_used_over_config(monkeypatch):
+    # config itself still carries the loopback placeholder, but the
+    # (already-resolved) override address is non-loopback -- must NOT refuse.
+    monkeypatch.setattr(config, "TRAIN_SERVER_IP", "127.0.0.1")
+    assert upload_guard.check_target("203.0.113.5") is None
+
+
+def test_check_target_override_loopback_still_refuses(monkeypatch):
+    # config itself is fine, but the resolved override IS loopback.
+    monkeypatch.setattr(config, "TRAIN_SERVER_IP", "pod.example")
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.check_target("127.0.0.1")
+
+
+def test_check_target_no_arg_still_reads_config(monkeypatch):
+    monkeypatch.setattr(config, "TRAIN_SERVER_IP", "127.0.0.1")
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.check_target()
+
+
+# build_scp_command with an explicit server_ip -------------------------------
+
+
+def test_build_scp_command_server_ip_override(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "TRAIN_SERVER_IP", "pod.example")
+    files = [tmp_path / "sft_train.jsonl"]
+    cmd = upload_guard.build_scp_command(files, 2222, server_ip="pod-b.example")
+    assert cmd[-1] == "root@pod-b.example:/workspace/run/"
+
+
+def test_build_scp_command_no_override_still_uses_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "TRAIN_SERVER_IP", "pod.example")
+    files = [tmp_path / "sft_train.jsonl"]
+    cmd = upload_guard.build_scp_command(files, 2222)
+    assert cmd[-1] == "root@pod.example:/workspace/run/"
+
+
+# write_run_config seeds-subset override -------------------------------------
+
+
+def test_write_run_config_seeds_default_is_full_config_seeds(tmp_path):
+    path = tmp_path / "run_config.json"
+    upload_guard.write_run_config(path)
+    produced = json.loads(path.read_text(encoding="utf-8"))
+    assert produced["seeds"] == list(config.SEEDS)
+
+
+def test_write_run_config_seeds_override_subset(tmp_path):
+    subset = [config.SEEDS[0], config.SEEDS[2]]
+    path = tmp_path / "run_config.json"
+    upload_guard.write_run_config(path, seeds=subset)
+    produced = json.loads(path.read_text(encoding="utf-8"))
+    assert produced["seeds"] == subset
+    assert produced["seeds"] != list(config.SEEDS)
+
+
+def test_write_run_config_seeds_override_single_seed(tmp_path):
+    # The exact shape a staged one-seed-at-a-time run ships.
+    subset = [config.SEEDS[0]]
+    path = tmp_path / "run_config.json"
+    upload_guard.write_run_config(path, seeds=subset)
+    produced = json.loads(path.read_text(encoding="utf-8"))
+    assert produced["seeds"] == subset
+
+
+def test_write_run_config_seeds_override_empty_list_refuses(tmp_path):
+    path = tmp_path / "run_config.json"
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.write_run_config(path, seeds=[])
+    assert not path.exists()
+
+
+def test_write_run_config_seeds_override_duplicate_refuses(tmp_path):
+    path = tmp_path / "run_config.json"
+    dup = [config.SEEDS[0], config.SEEDS[0]]
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.write_run_config(path, seeds=dup)
+    assert not path.exists()
+
+
+def test_write_run_config_seeds_override_not_subset_refuses(tmp_path):
+    path = tmp_path / "run_config.json"
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.write_run_config(path, seeds=[99999999])
+    assert not path.exists()
+
+
+def test_write_run_config_seeds_override_partially_unknown_refuses(tmp_path):
+    path = tmp_path / "run_config.json"
+    with pytest.raises(upload_guard.UploadRefused):
+        upload_guard.write_run_config(path, seeds=[config.SEEDS[0], 99999999])
+    assert not path.exists()
+
+
+def test_validate_seeds_subset_preserves_caller_order(tmp_path):
+    ordered = [config.SEEDS[2], config.SEEDS[0]]
+    assert upload_guard._validate_seeds_subset(ordered) == ordered
+
+
+# main(): end-to-end with the new flags --------------------------------------
+
+
+def test_main_seeds_flag_writes_subset(env):
+    seed_a, seed_b = config.SEEDS[0], config.SEEDS[1]
+    rc = upload_guard.main(["--seeds", f"{seed_a},{seed_b}"])
+    assert rc == 0
+    produced = json.loads((env["data_dir"] / "run_config.json").read_text(encoding="utf-8"))
+    assert produced["seeds"] == [seed_a, seed_b]
+
+
+def test_main_seeds_flag_single_seed(env):
+    seed_a = config.SEEDS[0]
+    rc = upload_guard.main(["--seeds", str(seed_a)])
+    assert rc == 0
+    produced = json.loads((env["data_dir"] / "run_config.json").read_text(encoding="utf-8"))
+    assert produced["seeds"] == [seed_a]
+
+
+def test_main_no_seeds_flag_still_ships_full_cohort(env):
+    rc = upload_guard.main([])
+    assert rc == 0
+    produced = json.loads((env["data_dir"] / "run_config.json").read_text(encoding="utf-8"))
+    assert produced["seeds"] == list(config.SEEDS)
+
+
+def test_main_seeds_flag_bad_value_refuses(env, capsys):
+    rc = upload_guard.main(["--seeds", "not-an-int"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "UPLOAD REFUSED" in captured.err
+    assert not (env["data_dir"] / "run_config.json").exists()
+
+
+def test_main_seeds_flag_not_subset_refuses(env, capsys):
+    rc = upload_guard.main(["--seeds", "99999999"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "UPLOAD REFUSED" in captured.err
+
+
+def test_main_server_ip_and_port_flags_used_for_scp(env, monkeypatch):
+    recorded = {}
+
+    def fake_run(cmd, check=False):
+        recorded["cmd"] = cmd
+        recorded["check"] = check
+
+    monkeypatch.setattr(upload_guard.subprocess, "run", fake_run)
+
+    rc = upload_guard.main(["--execute", "--server-ip", "pod-b.example", "--server-ssh-port", "2299"])
+
+    assert rc == 0
+    assert recorded["cmd"][1:3] == ["-P", "2299"]
+    assert recorded["cmd"][-1] == "root@pod-b.example:/workspace/run/"
+
+
+def test_main_server_ip_flag_overrides_stale_loopback_config(env, monkeypatch):
+    # The whole point of the additive per-box override: config.py can be
+    # left at its post-teardown loopback placeholder and a run still
+    # proceeds, targeting the box named on the command line.
+    monkeypatch.setattr(config, "TRAIN_SERVER_IP", "127.0.0.1")
+    rc = upload_guard.main(["--server-ip", "pod-b.example"])
+    assert rc == 0
+
+
+def test_main_no_server_ip_flag_still_refuses_on_loopback_config(env, monkeypatch, capsys):
+    # Default behavior byte-unchanged: with no override, a loopback config
+    # still refuses exactly as before.
+    monkeypatch.setattr(config, "TRAIN_SERVER_IP", "127.0.0.1")
+    rc = upload_guard.main([])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "UPLOAD REFUSED" in captured.err
+
+
+def test_main_combined_overrides_end_to_end(env, monkeypatch):
+    # The exact shape one box of a multi-box run uses: its own address,
+    # its own ssh port, its own seed subset -- config.py touched by none of it.
+    monkeypatch.setattr(config, "TRAIN_SERVER_IP", "127.0.0.1")  # config left untouched/placeholder
+    recorded = {}
+    monkeypatch.setattr(upload_guard.subprocess, "run", lambda cmd, check=False: recorded.update(cmd=cmd))
+
+    seed_a = config.SEEDS[0]
+    rc = upload_guard.main([
+        "--execute",
+        "--server-ip", "pod-b.example",
+        "--server-ssh-port", "2299",
+        "--seeds", str(seed_a),
+    ])
+
+    assert rc == 0
+    assert recorded["cmd"][-1] == "root@pod-b.example:/workspace/run/"
+    produced = json.loads((env["data_dir"] / "run_config.json").read_text(encoding="utf-8"))
+    assert produced["seeds"] == [seed_a]
+    # config.py's own operator block was never consulted for the address.
+    assert config.TRAIN_SERVER_IP == "127.0.0.1"

@@ -14,6 +14,16 @@ Every host/port value comes from ``config`` (the SSH port from
 with the ``TRAIN_SSH_PORT`` env var as fallback); this module never spells
 out an address itself (see ``config.py`` for the single-source-of-truth rule
 this package-wide scan enforces).
+
+Per-invocation overrides (additive, 2026-08-01, for running several boxes
+concurrently without editing ``config.py``'s operator block once per box):
+``resolve_server_ip``/``resolve_ssh_port`` accept an explicit override
+(highest precedence), then a dedicated ``*_OVERRIDE`` environment variable,
+then fall back to the existing config/``TRAIN_SSH_PORT`` chain unchanged.
+``write_run_config`` similarly accepts a validated seeds SUBSET in place of
+the full ``config.SEEDS`` cohort. None of this changes default behavior when
+no override is supplied, and none of it hardcodes an address -- overrides
+are always caller- or environment-supplied strings, never literals here.
 """
 
 from __future__ import annotations
@@ -73,22 +83,36 @@ def _check_manifest_corpus_sha(manifest_path) -> None:
             f"{manifest_path}: manifest corpus sha {sha[:16]} != pinned {config.EXPECTED_CORPUS_SHA256[:16]} -- corpus moved since W2 build."
         )
 
-def resolve_ssh_port() -> int:
-    """Resolve the pod's external SSH port from config or the environment.
+def resolve_ssh_port(override: "int | str | None" = None) -> int:
+    """Resolve the pod's external SSH port: override > config > env.
 
     ``config.TRAIN_SERVER_SSH_PORT`` is the RUNBOOK Appendix A field
     (applied 2026-07-25; per-pod value set at section 1.3);
     ``TRAIN_SSH_PORT`` remains the env fallback for states where the
     attribute is absent. Either source is accepted; config wins if both
-    are set.
+    are set. This is the pre-existing, byte-unchanged behavior when
+    ``override`` is omitted and ``TRAIN_SERVER_SSH_PORT_OVERRIDE`` is unset.
+
+    ``override`` (e.g. a ``--server-ssh-port`` CLI flag) takes precedence
+    over everything else when given; the ``TRAIN_SERVER_SSH_PORT_OVERRIDE``
+    env var is the same override expressed without a flag. Both are
+    additive (2026-08-01): they let one invocation target a specific box
+    without touching ``config.py``'s operator block, for running several
+    boxes concurrently. Neither is a literal address -- both are always
+    caller- or environment-supplied at call time.
     """
-    raw = getattr(config, "TRAIN_SERVER_SSH_PORT", None)
+    raw = override
+    if raw is None:
+        raw = os.environ.get("TRAIN_SERVER_SSH_PORT_OVERRIDE")
+    if raw is None:
+        raw = getattr(config, "TRAIN_SERVER_SSH_PORT", None)
     if raw is None:
         raw = os.environ.get("TRAIN_SSH_PORT")
     if raw is None:
         raise UploadRefused(
-            "no SSH port configured -- set config.TRAIN_SERVER_SSH_PORT (RUNBOOK "
-            "Appendix A) or export TRAIN_SSH_PORT (RUNBOOK section 1.3) before uploading."
+            "no SSH port configured -- pass --server-ssh-port, export "
+            "TRAIN_SERVER_SSH_PORT_OVERRIDE, set config.TRAIN_SERVER_SSH_PORT (RUNBOOK "
+            "Appendix A), or export TRAIN_SSH_PORT (RUNBOOK section 1.3) before uploading."
         )
     try:
         port = int(raw)
@@ -103,22 +127,57 @@ def resolve_ssh_port() -> int:
     return port
 
 
-def check_target() -> None:
-    """Refuse while ``config.TRAIN_SERVER_IP`` is still the loopback placeholder.
+def resolve_server_ip(override: "str | None" = None) -> str:
+    """Resolve the pod's public IP/hostname: override > env > config.
+
+    ``override`` (e.g. a ``--server-ip`` CLI flag) takes precedence when
+    given; then the ``TRAIN_SERVER_ADDRESS_OVERRIDE`` environment variable;
+    then ``config.TRAIN_SERVER_IP`` unchanged -- the pre-existing,
+    byte-unchanged behavior when neither override channel is used.
+
+    Additive (2026-08-01), mirroring ``resolve_ssh_port``: lets one
+    invocation target a specific box's address without editing
+    ``config.py``'s operator block, for running several boxes concurrently.
+    This function never spells out an address itself -- ``override`` is
+    always caller- or environment-supplied (RUNBOOK single-source-of-truth
+    rule; ``tests/test_config.py::test_single_source_of_truth_for_server_address``
+    scans this file for IP/URL literals same as every other module here).
+    """
+    if override is not None:
+        return override
+    env_override = os.environ.get("TRAIN_SERVER_ADDRESS_OVERRIDE")
+    if env_override:
+        return env_override
+    return config.TRAIN_SERVER_IP
+
+
+def check_target(ip: "str | None" = None) -> None:
+    """Refuse while the effective target is still the loopback placeholder.
 
     Shared by this uploader and ``tunnel.py`` (both drive ssh at the pod).
     A hostname that ``ipaddress.ip_address`` cannot parse is treated as
     acceptable (it is presumably a real pod hostname, not the shipped
     placeholder) -- only a literal loopback address is refused.
+
+    ``ip``, if given, is the already-resolved effective address (e.g. from
+    ``resolve_server_ip``) and is checked instead of
+    ``config.TRAIN_SERVER_IP`` -- additive (2026-08-01): a per-invocation
+    ``--server-ip`` override must be judged on ITS OWN value, not config's,
+    so a stale loopback placeholder left in config.py never blocks a
+    correctly-overridden run. Omitting ``ip`` reproduces the pre-existing
+    behavior exactly (checks ``config.TRAIN_SERVER_IP``).
     """
+    if ip is None:
+        ip = config.TRAIN_SERVER_IP
     try:
-        addr = ipaddress.ip_address(config.TRAIN_SERVER_IP)
+        addr = ipaddress.ip_address(ip)
     except ValueError:
         return  # a hostname, not an IP literal -- acceptable
     if addr.is_loopback:
         raise UploadRefused(
-            "config.TRAIN_SERVER_IP is still the loopback placeholder -- set it to "
-            "the rented pod's real address per RUNBOOK section 1.3 first."
+            "the effective target address is still the loopback placeholder -- set "
+            "config.TRAIN_SERVER_IP per RUNBOOK section 1.3, or pass --server-ip / "
+            "export TRAIN_SERVER_ADDRESS_OVERRIDE, to the pod's real address first."
         )
 
 
@@ -199,7 +258,35 @@ def validate_dataset() -> dict:
     return {"sha256": build_dataset.sha256_file(dataset_path), "rows": len(rows)}
 
 
-def write_run_config(path, identity_receipt: dict = None) -> None:
+def _validate_seeds_subset(seeds) -> list:
+    """Validate a seeds-subset override: non-empty, subset of config.SEEDS, no dups.
+
+    Additive (2026-08-01): lets one box's ``run_config.json`` ship fewer
+    than the full ``config.SEEDS`` cohort (e.g. 3 seeds for a per-box
+    split, or a single staged seed) without editing ``config.py`` itself.
+    Returns the validated list, order preserved as given -- callers may
+    list a subset in whatever order suits their box assignment; only
+    membership/uniqueness is enforced. Raises ``UploadRefused`` (not
+    ``ValueError``) naming the specific problem, consistent with every
+    other refusal this module raises.
+    """
+    if not seeds:
+        raise UploadRefused("seeds override must be a non-empty list -- got an empty/falsy value.")
+    seeds = list(seeds)
+    if len(set(seeds)) != len(seeds):
+        raise UploadRefused(f"seeds override contains duplicates: {seeds!r}")
+    allowed = set(config.SEEDS)
+    unknown = [s for s in seeds if s not in allowed]
+    if unknown:
+        raise UploadRefused(
+            f"seeds override {unknown!r} not present in config.SEEDS {list(config.SEEDS)!r} -- "
+            "the override must be a subset of the pinned control cohort, never a seed "
+            "outside it."
+        )
+    return seeds
+
+
+def write_run_config(path, identity_receipt: dict = None, seeds=None) -> None:
     """Write ``run_config.json``: every hyperparameter/seed/pin read live from config.
 
     The box never hardcodes a parameter -- this is the one file that
@@ -213,6 +300,13 @@ def write_run_config(path, identity_receipt: dict = None) -> None:
     which never has a manifest-sha to echo) -- every existing call
     site/test that only exercises the fp16 path keeps working unchanged.
 
+    ``seeds``, if given, overrides ``config.SEEDS`` with a validated
+    SUBSET (see ``_validate_seeds_subset``) -- the additive per-box
+    seed-scoping knob (2026-08-01) for shipping fewer than the full
+    cohort to one box. ``None`` (the default) reproduces
+    ``list(config.SEEDS)`` exactly -- byte-unchanged for every existing
+    call site/test.
+
     NOTE on ``base_source_sha256``'s shape (adjudicated report-only, review
     2026-07-30): it holds a 40-hex git commit sha under the fp16 scheme
     (``verify_base_identity.FP16_REVISION``) but a 64-hex sha256 under the
@@ -223,11 +317,14 @@ def write_run_config(path, identity_receipt: dict = None) -> None:
     pin that is follows directly from ``base_scheme`` sitting right next to
     it in this same payload.
     """
+    effective_seeds = _validate_seeds_subset(seeds) if seeds is not None else list(config.SEEDS)
     payload = {
         # Explicit list from config (v2, 2026-07-30). Was
         # [SEED, SEED+1, SEED+2] -- capped the campaign at 3 seeds and broke
         # across month boundaries; see config.SEEDS for the pinned control set.
-        "seeds": list(config.SEEDS),
+        # Per-box subset override (2026-08-01): "seeds" ships EFFECTIVE_SEEDS,
+        # not necessarily the full cohort -- see the "seeds" parameter above.
+        "seeds": effective_seeds,
         "hyperparams": {
             "rank": config.LORA_RANK,
             "alpha": config.LORA_ALPHA,
@@ -380,9 +477,16 @@ def write_receipt(path, dataset_info: dict, payload_shas: dict) -> None:
     Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def build_scp_command(files, ssh_port) -> list:
-    """Pure argv builder for the guarded scp -- no subprocess started here."""
-    return ["scp", "-P", str(ssh_port)] + [str(f) for f in files] + [f"root@{config.TRAIN_SERVER_IP}:/workspace/run/"]
+def build_scp_command(files, ssh_port, server_ip: "str | None" = None) -> list:
+    """Pure argv builder for the guarded scp -- no subprocess started here.
+
+    ``server_ip``, if given, is used in place of ``config.TRAIN_SERVER_IP``
+    (additive, 2026-08-01 -- e.g. the already-resolved value from
+    ``resolve_server_ip``). Omitting it reproduces the pre-existing
+    behavior exactly.
+    """
+    ip = server_ip if server_ip is not None else config.TRAIN_SERVER_IP
+    return ["scp", "-P", str(ssh_port)] + [str(f) for f in files] + [f"root@{ip}:/workspace/run/"]
 
 
 def main(argv=None) -> int:
@@ -393,6 +497,37 @@ def main(argv=None) -> int:
         default=None,
         help="path to the section 0.3 identity receipt (default: config.DATA_DIR/identity_receipt.json)",
     )
+    parser.add_argument(
+        "--server-ip",
+        default=None,
+        help=(
+            "override config.TRAIN_SERVER_IP for THIS invocation only (additive, "
+            "2026-08-01 -- see resolve_server_ip). Lets one call target a specific "
+            "box without editing config.py's operator block; default (omitted) "
+            "reproduces config.TRAIN_SERVER_IP exactly. Never hardcode an address "
+            "here in code -- always pass it at invocation (RUNBOOK single-source-"
+            "of-truth rule)."
+        ),
+    )
+    parser.add_argument(
+        "--server-ssh-port",
+        default=None,
+        type=int,
+        help=(
+            "override the resolved SSH port for THIS invocation only (additive, "
+            "2026-08-01 -- see resolve_ssh_port). Default (omitted) reproduces the "
+            "existing config.TRAIN_SERVER_SSH_PORT / TRAIN_SSH_PORT resolution."
+        ),
+    )
+    parser.add_argument(
+        "--seeds",
+        default=None,
+        help=(
+            "comma-separated subset of config.SEEDS to ship in run_config.json "
+            "(additive, 2026-08-01 -- see write_run_config/_validate_seeds_subset). "
+            "Default (omitted) ships the full config.SEEDS cohort, unchanged."
+        ),
+    )
     args = parser.parse_args(argv)
 
     identity_receipt_path = (
@@ -401,8 +536,18 @@ def main(argv=None) -> int:
 
     try:
         config.validate_config()
-        check_target()
-        ssh_port = resolve_ssh_port()
+        server_ip = resolve_server_ip(args.server_ip)
+        check_target(server_ip)
+        ssh_port = resolve_ssh_port(args.server_ssh_port)
+
+        seeds_override = None
+        if args.seeds is not None:
+            try:
+                seeds_override = [int(s.strip()) for s in args.seeds.split(",") if s.strip()]
+            except ValueError:
+                raise UploadRefused(
+                    f"--seeds must be a comma-separated list of ints, got {args.seeds!r}"
+                ) from None
 
         if not identity_receipt_path.exists():
             raise UploadRefused(
@@ -427,7 +572,7 @@ def main(argv=None) -> int:
         config.DATA_DIR.mkdir(parents=True, exist_ok=True)
         run_config_path = config.DATA_DIR / "run_config.json"
         upload_receipt_path = config.DATA_DIR / "upload_receipt.json"
-        write_run_config(run_config_path, identity_receipt)
+        write_run_config(run_config_path, identity_receipt, seeds=seeds_override)
 
         dataset_path = Path(config.SFT_DATASET_PATH)
         payload_shas = {
@@ -439,7 +584,7 @@ def main(argv=None) -> int:
         payload = [dataset_path, run_config_path, upload_receipt_path]
         check_blocklist(payload)
 
-        cmd = build_scp_command(payload, ssh_port)
+        cmd = build_scp_command(payload, ssh_port, server_ip)
 
         if not args.execute:
             print(cmd)
