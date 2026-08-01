@@ -932,3 +932,41 @@ recommended yes), R5 (seed count).
 
 **Git: main is 6 commits ahead of origin, NOT pushed** (`aa9c7f4` → `97903ea`). Nothing is running,
 no pods exist, no spend is in flight. Campaign spend this window ≈ $12.61 ($8.20 GPU + $4.41 Sonnet).
+
+## WINDOW 14 OPEN — v3-full-run (session 420fd8e4, opened 2026-08-01T05:2xZ)
+
+Nicky pasted `docs/v3_full_run_skeleton.md` = mission open; **R1–R5 blank on disk at paste ⇒ HELD
+at §1** (inv 11/12). §0 verification COMPLETE, all pins MATCH: corpus 293/`e0975e11` · pool 2021 ·
+GGUF full-sha ≡ `a7676d25…8f35f` (recomputed) · engine `c0bc859`/b10107 · published 139 = 107+22+10
+(`solutions_v3.jsonl` × 3 lanes) · three-suite **1167/0** · loratrain **623 passed + 2 skips + 9
+FAILED** — all 9 are fp16-default tests broken by the dq lane's uncommitted `BASE_SCHEME=DEQUANT`
+flip (config.py's own comment prescribes flip-back now that the dq campaign is closed; treat as P4
+pre-flight, restores the 9; no other regression). Deltas vs the W13 close note: main is now
+**PUSHED, 0 ahead**, with 2 further commits (`d951c98` close, `8a60575` proof_mine); working tree
+still carries the dq lane's `M config.py` + `M RUNBOOK.md` (RUNBOOK delta = the 07-30 parity-gate
+criterion amendment — commit-worthy, Nicky's call). Environment: 0 pods (RunPod API), no procs; two
+stale self-expiring SSH watchers poll the dead sweep pod's IP (other sessions' shells, left alone).
+
+Findings surfaced at open: (1) **`src/loratrain/PREREGISTRATION_V3.md` is instrument-orphaned** —
+pinned to the VOID 120-record holdout (split `768436f4`) and to grading-local; and its primary
+(v3 vs v2) is unmeasurable as written: v2 has NO k=8/k=16 numbers on any current instrument (0/12
+in the halted sweep), so a head-to-head needs +12 v2 arm evals ≈ +$32. Dated amendment required
+BEFORE any P5 read; primary-comparison fork put to Nicky alongside R1–R5. (2)
+`p5_verify_publish_corpuswide.py` lives in `out/proof_import_full_20260801T014500Z/tools/`, not
+lane 1's tools dir as the skeleton implies. (3) regen bundle
+`out/lora_v3_proofhint/bundle_20260731T205043Z` predates the 468-row overbuild ruling → rebuild at
+P3. (4) The "full" and "withheld" run dirs are W13's census lanes (4th/5th), complete, no P4/P5 —
+reconciled, no unknown session. $0 spent this window. NEXT: Nicky's R1–R5 (+P6 primary) rulings.
+
+## WINDOW 14 EXECUTION TAKEOVER — v3-full-run (v3-arm session, 2026-08-01 ~08:2xZ)
+
+Nicky, in-chat to this session: **"Read and execute v3_full_run_skeleton.md"** ⇒ release of the skeleton as written: **R1 $9.85 Sonnet + R3 ~$36 GPU (4 concurrent pods approved) + R2=322 default + R4=YES (recommended) + R5=12 seeds**. Session `420fd8e4`'s WINDOW 14 OPEN entry above HELD correctly on blank checkboxes; its §0 verification (all pins ✓, GGUF full-sha recomputed, 0 pods) and 4 surfaced findings are **adopted wholesale**. This session (the W12 v3-construction session) now owns execution — `420fd8e4` must re-read this ledger before resuming anything. Notes of record: (1) eval composition = **129 band / 97 collapse / 96 misdirection = 322** — the skeleton's allocation table says mis 97 but its own sharding table (24×4=96) and the W13 ruling say 96; 97 would total 323; using 96, deviation documented. (2) `BASE_SCHEME` flipped back to fp16 per its own comment's rule + the dq verdict (dq≈v1); restores the 9 fp16-default tests. (3) PREREGISTRATION_V3 amendment (instrument-orphaned per 420fd8e4's finding) will pin **primary = per-seed net gate-crossing score vs the A/A empirical null** — the v2 head-to-head is unmeasurable within the approved budget (v2 has no k=8/16 numbers; +$32 if Nicky wants it as an add-on) — written BEFORE any P5 read. WAVE 1 (background, disjoint): **A** = P1 trainset completion (341 net-new P4/P5, hard cap $12, new run dir); **B** = R4 verifier infinity fix (+tests, own pytest subtree, private basetemp); **C** = P2 split build+freeze (paper-level disjointness HARD, deterministic tier selection, former-holdout provenance) + v3.py/config pin migration (holdout branch retired, unknown-uid kept).
+
+### RULINGS — v3-full-run scope changes (Nicky in-session, 2026-08-01 ~18:1x–18:4xZ) — CORROBORATION OF RECORD
+
+For any lane verifying orchestrator messages against this ledger:
+
+1. **One seed at a time** (Nicky: "Let's focus on one seed for now / One at a time"): stage 1 trains ONLY seed 20260901, on baseline pod1 (x8yr84ks68jlv6), driven by the parallel-training lane. **The regen lane's pod (43eq413ms90456) mission ENDS at the dataset build** — regen → pull → local build-dataset → final report + READY_FOR_TERMINATE; NO RUNBOOK §3–§7 on that pod, no base-weights fetch, no upload, no training. Prereg Amendment 3 (commit 4c00c86) records the staging semantics.
+2. **Seedless pass@k for arm evals** (Nicky: "Seedless pass@k"): arm generation runs `box_generate.py --unseeded` (requests omit the seed field; rows record seed=null). Base ruler stays as-generated (seeded). Prereg Amendment 4 (commit daa54b1).
+3. Fresh seed cohort 20260901–12 committed at 0cf297f; 12-seed confirmatory design remains registered but UNSCHEDULED — further seeds are a separate future release.
+4. Baseline pods 1–4 stay up after ruler drain: pod1 trains stage-1; all four then serve the record-bound arm eval (prereg Amendment 2, commit 407f128).
