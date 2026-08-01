@@ -646,7 +646,12 @@ def test_build_dataset_end_to_end_tier_counts_and_provenance(env):
 # ============================================================================
 
 
-def test_blend_ratio_arithmetic(env):
+def test_blend_ratio_arithmetic(env, monkeypatch):
+    # The historical 25% blend arithmetic, preserved under monkeypatch: the
+    # live config is 0.0 since the no-anchor ruling (Nicky 2026-08-01) --
+    # see test_no_anchor_live_config below for the live-value behavior.
+    monkeypatch.setattr(config, "V3_ANCHOR_FRACTION", 0.25)
+    monkeypatch.setattr(config, "V3_HINTED_FRACTION", 0.75)
     _write_rollouts(env, _default_rollouts())
     _make_bundle(env)
     manifest = v3.build_dataset_cmd(**_build_dataset_kwargs(env))
@@ -654,13 +659,29 @@ def test_blend_ratio_arithmetic(env):
     assert blend["hinted_count"] == 3  # t0, t1, t2 verified; t3 hint_insufficient
     assert blend["hinted_collapse_count"] == 2  # t1, t2
     assert blend["hinted_band_count"] == 1  # t0
-    assert blend["anchor_count"] == round(3 * config.V3_ANCHOR_FRACTION / config.V3_HINTED_FRACTION)
+    assert blend["anchor_count"] == round(3 * 0.25 / 0.75)
     assert blend["anchor_count"] == 1
     assert blend["final_rows"] == 4
     rows = _read_jsonl(manifest["dataset"]["path"])
     assert len(rows) == 4
     anchor_rows = [r for r in rows if r["provenance"]["source_tier"] == "anchor"]
     assert len(anchor_rows) == 1
+
+
+def test_no_anchor_live_config(env):
+    # Live config: V3_ANCHOR_FRACTION == 0.0 (no-anchor ruling, 2026-08-01).
+    # The anchor draw is skipped entirely; every published row is hinted.
+    assert config.V3_ANCHOR_FRACTION == 0.0
+    _write_rollouts(env, _default_rollouts())
+    _make_bundle(env)
+    manifest = v3.build_dataset_cmd(**_build_dataset_kwargs(env))
+    blend = manifest["blend"]
+    assert blend["hinted_count"] == 3
+    assert blend["anchor_count"] == 0
+    assert blend["final_rows"] == 3
+    rows = _read_jsonl(manifest["dataset"]["path"])
+    assert len(rows) == 3
+    assert all(r["provenance"]["source_tier"] != "anchor" for r in rows)
 
 
 def test_anchor_draw_determinism_same_seed_same_rows(env):
