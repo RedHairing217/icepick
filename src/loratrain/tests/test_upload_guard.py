@@ -874,3 +874,105 @@ def test_main_combined_overrides_end_to_end(env, monkeypatch):
     assert produced["seeds"] == [seed_a]
     # config.py's own operator block was never consulted for the address.
     assert config.TRAIN_SERVER_IP == "127.0.0.1"
+
+
+# ============================================================================
+# v3-shaped provenance dispatch (authorization commit 560c7ff)
+# ============================================================================
+
+
+def _v3_row(uid="v3u1", *, verified=True, sha="a" * 64, tier="band", hint_in_prompt=False):
+    from loratrain import config as _cfg
+    user = f"Statement {uid}. /no_think"
+    if hint_in_prompt:
+        user = f"Statement {uid}.{_cfg.V3_HINT_MARKER}leaked hint /no_think"
+    return {
+        "prompt": [
+            {"role": "system", "content": _cfg.PASS_AT_K_SYSTEM_PROMPT},
+            {"role": "user", "content": user},
+        ],
+        "completion": [{"role": "assistant", "content": f"\n\nTrace {uid}. \\boxed{{7}}"}],
+        "provenance": {
+            "uid": uid,
+            "proof_raw_sha": sha,
+            "regen_sample_idx": 0,
+            "verify_receipt": {"k_tried": 1, "verified": verified},
+            "source_tier": tier,
+            "arxiv_id": "0000.00001",
+        },
+    }
+
+
+def _v3_env(tmp_path, monkeypatch, rows):
+    import hashlib as _h
+    import json as _j
+    from loratrain import build_dataset as _bd, config as _cfg
+    ds = tmp_path / "sft_train.jsonl"
+    ds.write_text("\n".join(_j.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    split = {"train_side_uids": [r["provenance"]["uid"] for r in rows] + ["spare"]}
+    sp = tmp_path / "split.json"
+    sp.write_text(_j.dumps(split), encoding="utf-8")
+    man = {
+        "dataset": {"sha256": _bd.sha256_file(ds)},
+        "inputs": {"corpus": {"sha256": _cfg.EXPECTED_CORPUS_SHA256}},
+    }
+    mp = tmp_path / "dataset_manifest.json"
+    mp.write_text(_j.dumps(man), encoding="utf-8")
+    monkeypatch.setattr(_cfg, "SFT_DATASET_PATH", ds)
+    monkeypatch.setattr(_cfg, "DATASET_MANIFEST_PATH", mp)
+    monkeypatch.setattr(_cfg, "V3_SPLIT_PATH", sp)
+    monkeypatch.setattr(_cfg, "V3_EXPECTED_SPLIT_SHA256", _h.sha256(sp.read_bytes()).hexdigest())
+    return ds
+
+
+def test_v3_shaped_dataset_passes(tmp_path, monkeypatch):
+    rows = [_v3_row("v3u1"), _v3_row("v3u2", tier="collapse")]
+    _v3_env(tmp_path, monkeypatch, rows)
+    out = upload_guard.validate_dataset()
+    assert out["rows"] == 2
+
+
+def test_v3_unverified_row_refuses(tmp_path, monkeypatch):
+    _v3_env(tmp_path, monkeypatch, [_v3_row("v3u1", verified=False)])
+    with pytest.raises(upload_guard.UploadRefused, match="verified"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_bad_proof_sha_refuses(tmp_path, monkeypatch):
+    _v3_env(tmp_path, monkeypatch, [_v3_row("v3u1", sha="zz")])
+    with pytest.raises(upload_guard.UploadRefused, match="64-hex"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_offtier_refuses(tmp_path, monkeypatch):
+    _v3_env(tmp_path, monkeypatch, [_v3_row("v3u1", tier="solved")])
+    with pytest.raises(upload_guard.UploadRefused, match="source_tier"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_hint_marker_in_prompt_refuses(tmp_path, monkeypatch):
+    _v3_env(tmp_path, monkeypatch, [_v3_row("v3u1", hint_in_prompt=True)])
+    with pytest.raises(upload_guard.UploadRefused, match="hint marker"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_uid_outside_train_side_is_leakage(tmp_path, monkeypatch):
+    import json as _j
+    from loratrain import build_dataset as _bd, config as _cfg
+    rows = [_v3_row("v3u1")]
+    _v3_env(tmp_path, monkeypatch, rows)
+    sp = tmp_path / "split.json"
+    sp.write_text(_j.dumps({"train_side_uids": ["someone-else"]}), encoding="utf-8")
+    import hashlib as _h
+    monkeypatch.setattr(_cfg, "V3_EXPECTED_SPLIT_SHA256", _h.sha256(sp.read_bytes()).hexdigest())
+    with pytest.raises(_bd.LeakageError, match="train side"):
+        upload_guard.validate_dataset()
+
+
+def test_mixed_shapes_refuse(tmp_path, monkeypatch):
+    legacy = {"prompt": [{"role": "system", "content": "x"}, {"role": "user", "content": "y /no_think"}],
+              "completion": [{"role": "assistant", "content": "z"}],
+              "provenance": {"uid": "old1", "verdict": "correct", "verbatim_output": "z", "rollout_uid": "r1"}}
+    _v3_env(tmp_path, monkeypatch, [_v3_row("v3u1"), legacy])
+    with pytest.raises(upload_guard.UploadRefused, match="MIXED"):
+        upload_guard.validate_dataset()

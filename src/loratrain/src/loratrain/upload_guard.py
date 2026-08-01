@@ -199,6 +199,103 @@ def check_blocklist(paths) -> None:
                 )
 
 
+def _row_is_v3_shaped(row) -> bool:
+    """v3 rows are discriminated by ``provenance.verify_receipt`` -- a field
+    the v1/v2 harvest never wrote (fail-closed: absence routes to the strict
+    legacy check). See docs/SESSION_HANDOFF.md "AUTHORIZATION -- upload_guard
+    accepts v3-shaped dataset provenance" (2026-08-01, commit 560c7ff)."""
+    prov = row.get("provenance")
+    return isinstance(prov, dict) and "verify_receipt" in prov
+
+
+_HEX64 = frozenset("0123456789abcdef")
+
+
+def _assert_v3_row(row, rownum: int, dataset_path) -> str:
+    """Equal-strictness per-row checks for a v3-shaped row; returns its uid.
+    Inline by design -- importing ``loratrain.v3`` here would break the
+    isolation rule that no existing module imports v3."""
+    prov = row.get("provenance") or {}
+    uid = prov.get("uid")
+    if not uid or not isinstance(uid, str):
+        raise UploadRefused(f"{dataset_path} row {rownum}: v3 row missing provenance.uid")
+    receipt = prov.get("verify_receipt")
+    if not isinstance(receipt, dict) or receipt.get("verified") is not True:
+        raise UploadRefused(
+            f"{dataset_path} row {rownum} (uid {uid}): verify_receipt.verified is not True -- "
+            "only endpoint-verified regen traces may upload."
+        )
+    idx = prov.get("regen_sample_idx")
+    if not isinstance(idx, int) or isinstance(idx, bool) or idx < 0:
+        raise UploadRefused(f"{dataset_path} row {rownum} (uid {uid}): bad regen_sample_idx {idx!r}")
+    sha = prov.get("proof_raw_sha")
+    if not (isinstance(sha, str) and len(sha) == 64 and set(sha.lower()) <= _HEX64):
+        raise UploadRefused(f"{dataset_path} row {rownum} (uid {uid}): proof_raw_sha is not 64-hex")
+    if prov.get("source_tier") not in ("band", "collapse"):
+        raise UploadRefused(
+            f"{dataset_path} row {rownum} (uid {uid}): source_tier {prov.get('source_tier')!r} "
+            "not in ('band', 'collapse')"
+        )
+    user_content = row["prompt"][1]["content"]
+    if config.V3_HINT_MARKER in user_content:
+        raise UploadRefused(
+            f"{dataset_path} row {rownum} (uid {uid}): training prompt contains the hint marker -- "
+            "the hint must never reach a stored training prompt."
+        )
+    return uid
+
+
+def _validate_v3_dataset(rows, dataset_path) -> dict:
+    """The v3 branch of validate_dataset (authorization: commit 560c7ff).
+
+    Equal strictness, different mechanics: per-row inline checks +
+    wellformedness; uid-level dedupe (cap1 -- v3 rows have no rollout_uid);
+    sha-chain to the build manifest (the build ran the statement-leakage
+    screen against the CURRENT eval set; a byte-identical file inherits that
+    screen); membership re-asserted against the pinned v3 proof-split's
+    train_side_uids (the old 200/100 eval frame is VOID for v3 data --
+    checking it would wrongly refuse former-holdout train rows)."""
+    build_dataset.assert_prompt_completion_wellformed(rows)
+    uids = [
+        _assert_v3_row(row, rownum, dataset_path)
+        for rownum, row in enumerate(rows, start=1)
+    ]
+    if len(set(uids)) != len(uids):
+        raise UploadRefused(f"{dataset_path}: duplicate uids in v3 dataset (cap1 violated)")
+
+    recomputed = build_dataset.sha256_file(dataset_path)
+    manifest_path = Path(config.DATASET_MANIFEST_PATH)
+    if not manifest_path.exists():
+        raise UploadRefused(f"{manifest_path} does not exist -- v3 dataset must carry its build manifest.")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    recorded = (manifest.get("dataset") or {}).get("sha256")
+    if recorded != recomputed:
+        raise UploadRefused(
+            f"{dataset_path}: sha256 {recomputed[:16]} != build manifest's {str(recorded)[:16]} -- "
+            "the file drifted since build-dataset ran its guards; rebuild before upload."
+        )
+    corpus_sha = ((manifest.get("inputs") or {}).get("corpus") or {}).get("sha256")
+    if corpus_sha != config.EXPECTED_CORPUS_SHA256:
+        raise UploadRefused(
+            f"{manifest_path}: corpus sha {str(corpus_sha)[:16]} != pinned "
+            f"{config.EXPECTED_CORPUS_SHA256[:16]}"
+        )
+
+    split_path = Path(config.V3_SPLIT_PATH)
+    split_bytes = split_path.read_bytes()
+    import hashlib as _hashlib
+    if _hashlib.sha256(split_bytes).hexdigest() != config.V3_EXPECTED_SPLIT_SHA256:
+        raise UploadRefused(f"{split_path}: sha256 != pinned V3_EXPECTED_SPLIT_SHA256")
+    train_side = set(json.loads(split_bytes.decode("utf-8"))["train_side_uids"])
+    outside = [u for u in uids if u not in train_side]
+    if outside:
+        raise build_dataset.LeakageError(
+            f"{dataset_path}: {len(outside)} row uid(s) outside the v3 split's train side "
+            f"(first: {outside[:3]}) -- refusing."
+        )
+    return {"sha256": recomputed, "rows": len(rows)}
+
+
 def validate_dataset() -> dict:
     """Re-run every W2 guard against the built dataset, independently, at upload time.
 
@@ -206,6 +303,11 @@ def validate_dataset() -> dict:
     raises ``UploadRefused`` EXCEPT leakage, which raises
     ``build_dataset.LeakageError`` directly (never caught/wrapped here) so it
     is never mistaken for an ordinary configuration problem.
+
+    Provenance-shape dispatch (2026-08-01, authorization commit 560c7ff):
+    a dataset whose rows ALL carry v3-shaped provenance routes to
+    ``_validate_v3_dataset``; all-legacy routes to the original checks
+    byte-unchanged; a MIXED file refuses outright.
     """
     dataset_path = Path(config.SFT_DATASET_PATH)
     if not dataset_path.exists():
@@ -221,6 +323,15 @@ def validate_dataset() -> dict:
                 rows.append(json.loads(line))
             except json.JSONDecodeError as exc:
                 raise UploadRefused(f"{dataset_path}:{lineno}: invalid JSON ({exc})") from exc
+
+    v3_flags = [_row_is_v3_shaped(row) for row in rows]
+    if any(v3_flags):
+        if not all(v3_flags):
+            raise UploadRefused(
+                f"{dataset_path}: MIXED provenance shapes ({sum(v3_flags)} v3-shaped of "
+                f"{len(rows)} rows) -- a dataset must be all-legacy or all-v3; refusing."
+            )
+        return _validate_v3_dataset(rows, dataset_path)
 
     for rownum, row in enumerate(rows, start=1):
         try:
