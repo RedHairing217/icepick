@@ -111,7 +111,7 @@ ADAPTER_FORMAT = "peft"  # pinned 2026-07-22 (README D1: binding contract is on 
 
 BASE_SCHEME_FP16 = "fp16_hf_revision"
 BASE_SCHEME_DEQUANT = "dequant_q4km"
-BASE_SCHEME = BASE_SCHEME_FP16  # <-- EDIT HERE to flip: operator decision (see block comment above), not a default this revision changes
+BASE_SCHEME = BASE_SCHEME_FP16  # <-- EDIT HERE to flip: operator decision (see block comment above), not a default this revision changes. Flipped back 2026-08-01: dq campaign CLOSED (k=8 verdict dq ≈ v1 — quantization mismatch is not the limiter), per this comment's own flip-back rule and v3_full_run_skeleton P4 (fp16 stands). Prior state for the record: FLIPPED 2026-07-30 for the dequant arm per Nicky's Rule-A release (out/analysis/dequant_arm/GATE_FAILURE_FINDING.md).
 VALID_BASE_SCHEMES = (BASE_SCHEME_FP16, BASE_SCHEME_DEQUANT)
 
 # Expected `tensor_census.total` in gguf_to_hf.py's dequant_manifest.json for
