@@ -31,12 +31,16 @@ that produced them.
 
 ## HARD-WON FACTS (do not rediscover — each cost real money or a corrupted run)
 
-1. **Grading must run where `antlr4` is installed.** Measured 2026-07-31: a pod
+1. **Grading needs `antlr4`, and needs a parity gate.** Measured 2026-07-31: a pod
    grader without `antlr4-python3-runtime` scored ~70/120 records WRONG per config,
-   silently — sympy's LaTeX parser fails closed, so correct answers read as wrong and
-   `n_correct` collapses to 0. The local M4 (antlr4 present) is authoritative. If you
-   grade anywhere else, install antlr4 AND parity-check against a locally-graded
-   config until byte-identical, or your numbers are fiction.
+   **silently** — sympy's LaTeX parser fails closed, so correct answers read as wrong
+   and `n_correct` collapses to 0. Nearly every answer in this corpus is LaTeX-tier,
+   so the damage is total and invisible. **Proven pod-grading recipe (parity 10/10
+   byte-identical vs local, 2026-07-31):** venv + `sympy==1.14.0` +
+   `antlr4-python3-runtime==4.11`, ship the full `src/icepick` tree (partial trees
+   fail on `icepick.config` imports), then **re-grade an already-locally-graded
+   config and require zero record diffs before trusting any new number.** Never skip
+   the parity gate — it is the only thing that catches this class.
 2. **`-fa off` explicitly, always.** The build defaults to `-fa auto`; the entire
    reference set is auto-resolved-off, and explicit `off` was verified byte-identical
    to it (3/3). `-fa on` is a different instrument.

@@ -30,7 +30,8 @@ historical provenance.
 
 ## 1. RELEASE CHECKBOXES (Nicky)
 
-- [ ] **R1 — build the split + training set** (§3). Sonnet ≈ **$4.71**, no GPU.
+- [ ] **R1 — build the split + training set** (§3). Sonnet ≈ **$9.85**, no GPU.
+      OVER the $5 line — this is the overbuild ruling (all band + collapse backfill).
 - [ ] **R2 — eval size.** `322` (all 129 proofless band, per ruling) · or `~200` to cut
       GPU cost ~40% · or `___`
 - [ ] **R3 — GPU budget.** Base ruler + 12 arms at eval=322 ≈ **59 h ≈ $26** (A40).
@@ -40,24 +41,31 @@ historical provenance.
       the anchor exists splits the instrument.
 - [ ] **R5 — arm count.** 12 seeds (matches prior campaigns) · or `___`
 
-## 2. COMPOSITION — ruled 40/30/30 band/collapse/misdirection
+## 2. COMPOSITION — 40/60 band:fail, OVERBUILT (all band, collapse backfill)
 
 Split rule: **proof-bearing → training, proofless → eval.** Measured, not assumed:
 proof availability is **independent of difficulty** (mean n_correct 3.19 vs 3.23,
 Mann-Whitney p = 0.918) and roughly flat across tiers, so this introduces no
 difficulty confound.
 
-**Training (proof-bearing pool: band 187 / collapse 217 / misdirection 87)**
+**Training — OVERBUILT (Nicky, 2026-08-01): take ALL band, backfill the failure side
+with collapse.** Proof-bearing pool: band 187 / collapse 217 / misdirection 87.
 
 | tier | allocated | available | share |
 |---|---|---|---|
-| band | 116 | 187 | 40% |
-| collapse | 87 | 217 | 30% |
-| misdirection | **87** | **87** | 30% |
-| **total** | **290** | | |
+| band | **187 (all)** | 187 | 40.0% |
+| collapse | 194 | 217 | 41.5% |
+| misdirection | **87 (all)** | 87 | 18.6% |
+| **total** | **468** | | fail side 281 = 60.0% |
 
-**Misdirection is the binding tier** — it is fully consumed; band and collapse are not.
-139 rows already published, so **163 net-new P4 calls ≈ $4.71**.
+Band anchors the size at 40%; misdirection is **exhausted at 87**, so its 53-row
+shortfall against a strict 30% is **absorbed by collapse** (140 → 194). The 40/60
+band:fail ratio is preserved exactly; the 30/30 split *within* the failure side is not,
+because the corpus cannot supply it.
+
+139 rows already published, so **341 net-new P4 calls ≈ $9.85** — over the $5 line, R1
+covers it. (Strict 40/30/30 would be 290 rows at $4.71; overbuilding adds 177 rows for
+$5.14.) Leftover unused: 23 collapse. Band and misdirection are fully consumed.
 
 **Eval (proofless pool: band 129 / collapse 186 / misdirection 104)**
 
@@ -73,12 +81,12 @@ excluded). Screen the eval set for the 21 ungradeable records and exclude by nam
 
 ⚠ **Eval size is the dominant cost driver of the whole program.** 322 records × 16
 samples = 5,152 generations per config (~4.6 h on an A40). Base + 12 arms ≈ 59 h ≈ $26.
-Cutting eval to ~200 keeps the 40/30/30 shape and saves ~40%. This is R2.
+Cutting eval to ~200 keeps the tier shape and saves ~40%. This is R2.
 
 ## 3. PHASES
 
-### P1 — finish the training set (Sonnet, ~$4.71, no GPU)
-Run P4/P5 for the 163 net-new records using the existing lane tools
+### P1 — finish the training set (Sonnet, ~$9.85, no GPU)
+Run P4/P5 for the 341 net-new records using the existing lane tools
 (`out/proof_import_20260731T185338Z/tools/`, CONTRACTS.md schemas, cache key
 `(uid, sha256(proof_raw))`). Use `p5_verify_publish_corpuswide.py` — the other two
 guards refuse this mixed set (77 are old-train members, 587 are not). Assert cross-lane
