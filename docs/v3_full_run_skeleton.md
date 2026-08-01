@@ -83,6 +83,25 @@ excluded). Screen the eval set for the 21 ungradeable records and exclude by nam
 samples = 5,152 generations per config (~4.6 h on an A40). Base + 12 arms ≈ 59 h ≈ $26.
 Cutting eval to ~200 keeps the tier shape and saves ~40%. This is R2.
 
+## 2b. EXECUTION SUBSTRATE — RunPod (Nicky, standing ruling)
+
+**ALL eval runs on RunPod: generation AND grading. No local eval, ever.** The pod-side
+grader is a verified recipe, not an improvisation: venv + `sympy==1.14.0` +
+`antlr4-python3-runtime==4.11` + the **full** `src/icepick` tree (partial trees die on
+`icepick.config`). **Parity-check it against a known-good config and require ZERO record
+diffs before trusting any number** — without antlr4 the grader silently mis-scores ~70
+of 120 records per config, and it fails closed rather than erroring.
+
+Training, regeneration and the base ruler are likewise pod work.
+
+Exactly two steps stay local, each for a hard reason, not preference:
+
+1. **API-key custody (P1 Sonnet).** RunPod env vars are readable back through the
+   account API, so an Anthropic key on a pod is exposed. Every pod to date has received
+   only `uid` + `statement` — never keys, never answer keys beyond what grading needs.
+2. **Data selection / split assembly.** Building record lists from census artifacts is
+   data prep, not measurement; the inputs live on the M4.
+
 ## 3. PHASES
 
 ### P1 — finish the training set (Sonnet, ~$9.85, no GPU)
