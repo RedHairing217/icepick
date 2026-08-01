@@ -255,3 +255,33 @@ records what that does and does not change:
    confirmatory set as the pilot, or (b) include it with the optional-stopping
    caveat stated in the verdict. That choice is Nicky's, made then, recorded
    as its own amendment.
+
+---
+
+# AMENDMENT 4 — seedless arm sampling + stage-1 single-adapter analysis (2026-08-01 ~18:4xZ)
+
+Written before any arm generation. Two changes, both Nicky-directed today:
+
+1. **Seedless pass@k for arm evals.** Arm generation requests omit the seed
+   field (server default RNG; rows record seed=null; `box_generate.py
+   --unseeded`). The base ruler, already generated, used explicit seeds —
+   both regimes draw from the IDENTICAL pinned serving distribution (engine
+   `c0bc859`, `-fa off`, temp 0.7, max 2048, parallel 8), so estimates are
+   unbiased and mixing is valid; sample independence is unaffected;
+   per-rollout byte-reproducibility is explicitly waived (already unreliable
+   under warm-server call-order drift, opslog_phaseA probe finding).
+   Regeneration (training data) is untouched — it was already running seeded
+   and is data generation, not measurement.
+
+2. **Stage-1 primary read (n = 1 adapter, seed 20260901), declared before its
+   eval:** observed statistic = the adapter's net gate-crossing score vs the
+   base ruler over the 286 records (spec table, pooled-16 where rerun rules
+   fire). Null = **bootstrap A/A distribution**: per record, resample which 8
+   of the base's 16 same-pod samples form each half (B = 10,000), score
+   half-vs-half under the exact spec rules, collect the net each time.
+   Two-sided p = fraction of bootstrap |net| ≥ observed |net|. Report
+   promotions and demotions separately, and gate-crossings vs |Δ|≥4/16
+   magnitude moves as separate lines. This tests "this adapter differs from
+   instrument noise" — it does NOT test recipe replication (Amendment 3 §3
+   stands; per-seed draw-luck is invisible at n=1). If the campaign extends,
+   Amendment 1's 12-seed primary resumes per Amendment 3 §4.
