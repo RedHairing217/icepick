@@ -142,7 +142,74 @@ fp16 stands unless re-ruled). **Archive adapters into `src/loratrain/data/` imme
 4. Score per `gate_crossing_scoring_spec.md`. Report gate crossings and magnitude moves
    as **separate lines**.
 
-### P5b — pod fan-out (up to 4 concurrent, approved)
+### P5a — PIPELINE (Nicky's ruled execution order, 2026-08-01)
+
+Three phases. Baseline and training run **concurrently**; baseline pods are **shut down
+as soon as the ruler is established** rather than idling through training.
+
+```
+PHASE A  (concurrent)          PHASE B            PHASE C
+┌─ pods 1-4: BASELINE ~1.1 h ──┐
+│  → SHUT DOWN immediately     │
+└─ pod 5: regen + train ───────┴─ ~9.3 h ────────┬─ pods 1-4: 12 ARM EVALS ~17.1 h
+                                                  └─ shut down at completion
+```
+
+| phase | work | pods | wall-clock |
+|---|---|---|---|
+| **A** | base ruler, 5,152 gens, record-sharded | 4 | **~1.1 h** → then TERMINATE |
+| **A** | regeneration (~1.5 h) + 12 seeds × ~39 min | 1 | **~9.3 h** (critical path) |
+| **B** | pull adapters, sha-verify, archive to `src/loratrain/data/` | — | minutes |
+| **C** | 12 arm evals, 6,440 gens each (incl. ~25% rerun) | 4 | **~17.1 h** |
+| | | | **total ~26.4 h wall, ~82 pod-hours ≈ $36** |
+
+**Shutting the baseline pods at ~1.1 h is worth ~$14** — they would otherwise idle for
+the ~8.2 h that training still needs. That is the single largest avoidable cost in the
+plan, and it is why the phases are ordered this way.
+
+**Baseline sharding — the constraint that matters.** The ruler is ONE config, so the only
+parallel axis is *records*. Assign records to pods; **both k=8 passes of a given record
+must run on the SAME pod.** The A/A calibration requires the two halves to be independent
+*samples*, not independent *machines* — splitting them across hardware would confound
+sampling noise with cross-pod numeric differences. Verify by reassembly before use:
+322 records × 16 samples, no duplicates, no gaps.
+
+**Eval-set sharding — stratified, equal tier mix per pod (Nicky, 2026-08-01).** Every
+pod gets the SAME 40/30/30 composition, so no pod's slice is systematically harder and a
+lost or anomalous pod degrades precision uniformly rather than biasing a tier:
+
+| pod | records | band | collapse | misdirection |
+|---|---|---|---|---|
+| 1 | 82 | 33 | 25 | 24 |
+| 2 | 80 | 32 | 24 | 24 |
+| 3 | 80 | 32 | 24 | 24 |
+| 4 | 80 | 32 | 24 | 24 |
+
+**Ingest in 10-record intervals, per pod (Nicky, 2026-08-01).** Each interval is
+stratified 4 band / 3 collapse / 3 misdirection and is a **checkpoint boundary**:
+
+- 160 generations per interval at k=16 → **~8 min** on an A40
+- ~8 intervals per pod → **~1.1 h** per pod for the baseline
+- **A crash loses at most one interval (~8 min), never a whole shard**
+- **Resume rule:** interval *N* is complete iff its output file holds exactly 160 rows;
+  the driver skips completed intervals and re-runs only partial ones. Same
+  resume-from-disk contract as every prior driver in this project (AGENTS.md invariant 3).
+
+Write each interval to its own file (`<pod>_<interval>.jsonl`) and reassemble at the end
+— partial-file ambiguity is what makes crash recovery guesswork otherwise.
+
+**Cross-pod parity check — do this before trusting a sharded ruler.** Four pods producing
+one reference set is a new failure surface (see the CUDA-vs-Metal finding: 0/3
+byte-match across backends). Cheap decisive test: run ~5 records at **temperature 0** on
+every pod and byte-compare the outputs. Greedy decoding is deterministic, so identical
+A40s with identical builds must agree exactly. Any disagreement means the pods are not
+one instrument and the ruler cannot be pooled. ~10 minutes total.
+
+**Phase C is config-sharded, which is the easy case** — each arm is an independent
+serve-then-generate cycle, so assign whole configs to pods with no reassembly concerns.
+Still run the grader parity check (§2b) and the GGUF sha verification **per pod**.
+
+### P5b — pod fan-out economics (up to 4 concurrent, approved)
 
 Eval is embarrassingly parallel across configs — each config is an independent
 serve-then-generate cycle. **Cost is per pod-hour, so parallelism buys wall-clock at no
