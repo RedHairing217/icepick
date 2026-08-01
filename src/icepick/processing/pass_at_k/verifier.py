@@ -30,6 +30,16 @@ truncates to ``x``, flipping MB's form-equivalence audit cases from pass to
 fail. ``parse_expr`` therefore routes on surface syntax: strings carrying LaTeX
 markers (backslash, ``^``, ``{``) go to ``parse_latex`` first, plain strings go
 to ``sympify`` first, and each parser remains the other's fallback.
+
+A second deviation, found by census rather than by port: ``simplify(candidate
+- truth) == 0`` breaks when either side is infinite. ``oo - oo`` (and
+``-oo - -oo``) is ``nan``, and ``nan == 0`` is ``False`` — not an exception —
+so an infinity-valued answer silently failed to verify even against itself.
+``verify`` special-cases infinite operands: when either side's ``is_infinite``
+is true, it compares the two sympy objects directly (``oo == oo``,
+``oo != -oo``, ``oo != zoo``, ``oo != 5``) instead of subtracting. Finite
+answers are untouched — the subtraction path still runs unchanged for
+everything that isn't infinite.
 """
 
 from __future__ import annotations
@@ -167,6 +177,14 @@ def verify(candidate, truth_obj, tier):
         ce = parse_expr(rhs(c))
         if ce is None:
             return False
+        try:
+            infinite = bool(ce.is_infinite or truth_obj.is_infinite)
+        except Exception:
+            infinite = False
+        if infinite:
+            # oo - oo is nan, not 0, so the subtraction below can't be used
+            # for infinite operands; compare them directly instead.
+            return bool(ce == truth_obj)
         try:
             return bool(simplify(ce - truth_obj) == 0)
         except Exception:

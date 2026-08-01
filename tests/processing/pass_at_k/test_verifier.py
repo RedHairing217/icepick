@@ -162,3 +162,94 @@ def test_rhs_extraction_verifies():
 def test_verify_false_for_nonverifiable_tiers():
     for tier in ("prose", "piecewise", "multi", "empty", "reject"):
         assert V.verify("5", None, tier) is False
+
+
+# --- infinity guard (release checkbox R4) --------------------------------
+#
+# simplify(candidate - truth) == 0 breaks when either side is infinite:
+# oo - oo is nan, and nan == 0 is False, so an infinity-valued answer
+# silently failed to self-verify (censused: 21 non-drop corpus records, 18
+# misdirection + 3 collapse, all `fail` labels that were grader artifacts —
+# see out/analysis/verifier_fix_20260801/). The corpus-observed answer
+# strings below are pinned verbatim from a grep of
+# wellposed_all_with_passk.json, not invented.
+
+INFINITY_SELF_VERIFY_CASES = [
+    ("unsigned", r"$\infty$"),
+    ("positive", r"$+\infty$"),
+    ("negative", r"$-\infty$"),
+    ("positive_with_rhs_prefix", r"$p_N = +\infty$"),
+]
+
+
+@pytest.mark.parametrize(
+    "label, answer",
+    INFINITY_SELF_VERIFY_CASES,
+    ids=[c[0] for c in INFINITY_SELF_VERIFY_CASES],
+)
+def test_infinity_self_verifies(label, answer):
+    """An infinity-valued truth must verify against itself (the R4 defect)."""
+    tier, obj = V.classify(answer)
+    assert tier == "number"
+    assert V.verify(answer, obj, tier) is True
+
+
+def test_infinity_vs_finite_is_false():
+    tier, obj = V.classify(r"$+\infty$")
+    assert V.verify("5", obj, tier) is False
+
+    tier, obj = V.classify("5")
+    assert V.verify(r"$+\infty$", obj, tier) is False
+
+
+def test_positive_vs_negative_infinity_is_false():
+    tier, obj = V.classify(r"$+\infty$")
+    assert V.verify(r"$-\infty$", obj, tier) is False
+
+    tier, obj = V.classify(r"$-\infty$")
+    assert V.verify(r"$+\infty$", obj, tier) is False
+
+
+def test_infinity_minus_infinity_nan_resolves_false_not_exception():
+    """Pin the historical failure mode directly, then confirm verify() no
+    longer inherits it: oo - oo is nan and nan == 0 is False, so comparing
+    two *unequal* infinities must still come back False, cleanly."""
+    assert sp.simplify(sp.oo - sp.oo) is sp.nan
+    assert bool(sp.nan == 0) is False
+
+    tier, obj = V.classify(r"$+\infty$")
+    assert obj is sp.oo
+    assert V.verify(r"$-\infty$", obj, tier) is False
+
+
+def test_nan_candidate_against_finite_truth_is_false():
+    """A candidate that parses directly to nan (not via oo - oo) must not
+    crash verify() either — nan is neither infinite nor equal to anything."""
+    tier, obj = V.classify("5")
+    assert V.verify("nan", obj, tier) is False
+
+
+# --- finite-answer regressions (unchanged by the R4 guard) ----------------
+
+
+def test_finite_number_tier_regression():
+    tier, obj = V.classify("5")
+    assert tier == "number"
+    assert V.verify("5", obj, tier) is True
+    assert V.verify("6", obj, tier) is False
+
+
+def test_finite_latex_number_tier_regression():
+    """A LaTeX-marked finite answer routes through parse_latex, not
+    sympify; the R4 guard must not touch this path."""
+    tier, obj = V.classify(r"$\frac{1}{2}$")
+    assert tier == "number"
+    assert V.verify(r"$\frac{1}{2}$", obj, tier) is True
+    assert V.verify(r"$\frac{1}{3}$", obj, tier) is False
+
+
+def test_finite_expr_tier_regression():
+    tier, obj = V.classify("x**2 - 1")
+    assert tier == "expr"
+    assert V.verify("(x - 1)*(x + 1)", obj, tier) is True
+    assert V.verify("x**2 + 1", obj, tier) is False
