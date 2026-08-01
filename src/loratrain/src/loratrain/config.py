@@ -186,10 +186,19 @@ SEED = 20260722
 # ABSENT: it was the stage-A HP screen's shared seed on a 160-record subset, not
 # a control seed (docs/lora_campaign_results.md).
 SEEDS = [
-    20260722, 20260723, 20260724,                      # run-1 (2026-07-26/27)
-    20260725, 20260726, 20260727, 20260729, 20260730,  # stage R
-    20260731, 20260801, 20260802, 20260803,            # D2 extension
+    # v3-full-run cohort (R5: 12 FRESH seeds; Nicky release 2026-08-01, pinned
+    # here BEFORE training per PREREGISTRATION_V3 Amendment 1 §2). Deliberately
+    # disjoint from every prior campaign seed: the v1/v2 cohort was
+    # 20260722-27/29-31 + 20260801-03 (20260728 excluded as the HP-screen
+    # seed), so date-like values continue at 202609xx to stay collision-free
+    # and visually distinguishable as a new cohort.
+    20260901, 20260902, 20260903, 20260904, 20260905, 20260906,
+    20260907, 20260908, 20260909, 20260910, 20260911, 20260912,
 ]
+# Prior cohort, retired from the ACTIVE list 2026-08-01 (v1/v2/dq arms are
+# closed; their manifests pin their own seeds -- this constant only feeds NEW
+# run_configs): 20260722-24 (run-1), 20260725-27/29-30 (stage R),
+# 20260731/20260801-03 (D2 extension).
 
 # --- Hyperparameters ---------------------------------------------------------
 # Conventional starting points, not tuned -- W3 review (README "Open items").
