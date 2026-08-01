@@ -113,3 +113,83 @@ the confirmatory set, stated in the amendment.
   R3 curriculum shift (collapse-heavy mix). A positive result does not
   attribute between them; attribution would need a v3b ablation (out of
   scope, surface-only).
+
+---
+
+# AMENDMENT 1 — v3-full-run instrument (2026-08-01 ~10:1xZ)
+
+Written BEFORE: any base-ruler generation, any arm generation, any read of any
+eval-set measurement. Supersedes the 2026-07-31 sections above wherever they
+conflict — the instrument they pinned (200/100 split sha `768436f4`, 120-record
+holdout, local Metal grading, greedy-era comparators) was voided by Nicky's
+2026-08-01 split-rebuild ruling. The sections above remain as the historical
+record of the pre-rebuild design.
+
+## 1. Instrument
+
+- **Scoring authority:** `docs/gate_crossing_scoring_spec.md` (revised 2026-08-01)
+  in full — k=16 code-gate labels (fail 0–1 / band 2–12 / solved 13–16), ±1 per
+  problem, |Δ|≥4/16 magnitude criterion, solved-regression −1, missing data
+  excluded pairwise and counted.
+- **Eval set:** `evalharness/data/corpus_split_v3_proofsplit_20260801.json`
+  (sha16 `69735899efe9270e`), `eval_set_uids` = **286 records (104 band / 97
+  collapse / 85 misdirection)**. Nicky (2026-08-01) accepted 286 over the
+  originally-ruled 322: the paper-disjointness guard (train ∩ eval papers = ∅,
+  the load-bearing guard) excludes 91 candidates and is kept intact.
+- **Base ruler:** k=16 as two independent k=8 passes (different explicit seeds,
+  recorded; same serving config; both passes of a record on the SAME pod),
+  engine b10107 `c0bc859`, `-fa off` explicit, temp 0.7, max_tokens 2048,
+  `--parallel 8` pinned. Fresh ruler labels only — corpus tiers are never
+  "before" labels.
+- **Grading:** pod-side, R4-fixed verifier (commit `0aae56e`, landed pre-ruler;
+  ungradeable-by-name class EMPTY — pre-fix 21-list preserved in provenance),
+  zero-diff parity gate per pod against a known-good fixture config, plus the
+  temp-0 cross-pod probe before pooling any sharded measurement.
+
+## 2. Treatment
+
+12 fresh seeds (R5), fp16 base (dq verdict: dq ≈ v1), frozen control
+hyperparameters, trained on the **468-allocation hinted-only dataset** (no
+anchor — Nicky 2026-08-01; `V3_ANCHOR_FRACTION = 0.0`), cap1, hint-insufficient
+→ drop + census. The hint never appears in a training prompt (guard-enforced).
+
+## 3. Primary endpoint — DECLARED
+
+Per arm (seed) s: `net(s)` = Σ over eval records of the spec's ±1 gate-crossing
+score, arm-vs-base on the common ruler, pooled-16 where rerun rules fire,
+first-8-vs-first-8 elsewhere.
+
+**Primary test:** two-sided Wilcoxon signed-rank of the 12 per-seed `net(s)`
+values against the **A/A empirical null net** (the base ruler's two k=8 halves
+scored against each other under the exact spec rules), α = 0.05. Paired-t
+reported as sensitivity. The 12 seeds are replications of ONE treatment — one
+primary, no multiplicity correction. Effect size = median per-seed net and the
+promotion/demotion decomposition.
+
+## 4. Secondaries (reported, never gating)
+
+Promotions and demotions separately; gate-crossings vs |Δ|≥4/16 magnitude
+moves as SEPARATE lines (a verdict resting mainly on intra-band fluctuation is
+distrusted per spec); per-tier transition tables; per-seed training-loss floor
+(v2 completion-only reference band 0.3209–0.3243; at-or-below ⇒ "premise
+failed — hints added no fitting difficulty" reported prominently regardless of
+eval outcome); hint-insufficiency rate and verified-on-try-n histogram; hint
+n-gram copy census (threshold Nicky's); solved-guard: >20% of base-solved
+regressing in any arm ⇒ run flagged instrument-suspect, investigated before
+any reporting.
+
+## 5. Explicitly out of scope
+
+v3-vs-v2 head-to-head: NOT computable — v2 has no k-sampled measurements on
+any current instrument (0/12 in the halted sweep); the ~$32 option to measure
+the 12 v2 adapters on this ruler remains open and unexercised. Any such
+comparison, if later funded, gets its own dated amendment BEFORE its first read.
+
+## 6. Discipline
+
+No interim reads: no per-seed eval number is reported, quoted, or reasoned
+from until all 12 arms are complete AND the A/A null is computed (campaign
+scar: interim reads were wrong all three times they were taken). Both passes
+differ only in sampling seed. Pod identity recorded per config; anomalous arm
+⇒ pod identity is the first suspect. Deviations land as dated amendments
+BEFORE the affected read.

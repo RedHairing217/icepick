@@ -569,8 +569,8 @@ V3_HINT_MARKER = "\n\nReference solution (from the source paper):\n"
 # expression) so a future re-ruling is a value edit here, not a code
 # change; the two "derived" ones are kept as their own named constants
 # purely for readability at call sites, never independently edited.
-V3_ANCHOR_FRACTION = 0.25
-V3_HINTED_FRACTION = 1.0 - V3_ANCHOR_FRACTION  # 0.75 -- derived
+V3_ANCHOR_FRACTION = 0.0  # RE-RULED 0.25 -> 0.0 (Nicky, 2026-08-01, v3-full-run window): the 08-01 overbuild composition (468 hinted rows, skeleton section 2) supersedes the 07-31 blend design ENTIRELY -- no unhinted v2-cap1 anchor. Decisive extra reason: v2-cap1 rows are old-train records, some of which are EVAL-side under the new proof-split, so anchoring with them would train on eval statements. anchor_count computes to 0; the draw is skipped.
+V3_HINTED_FRACTION = 1.0 - V3_ANCHOR_FRACTION  # 1.0 -- derived
 V3_HINTED_COLLAPSE_FRACTION = 0.60
 V3_HINTED_BAND_FRACTION = 1.0 - V3_HINTED_COLLAPSE_FRACTION  # 0.40 -- derived
 
