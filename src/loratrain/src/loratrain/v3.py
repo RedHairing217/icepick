@@ -58,12 +58,14 @@ Two subcommands
 
 ``make-regen-bundle`` (local, trivial-CPU, skeleton P1 first half): reads
 solutions_v3.jsonl + its manifest, re-verifies the sha-chain, re-asserts
-every uid is a TRAIN uid of the pinned split (config.EXPECTED_SPLIT_SHA256)
--- any holdout or unknown uid hard-fails naming it -- and emits a
-box-shippable bundle: one ``{uid, regen_prompt}`` row per record, where
-``regen_prompt`` is the pass@k wire prompt WITH a paper-derived hint
-appended (see ``build_regen_prompt``). No answer-key field, no holdout uid,
-ever, in the bundle.
+every uid is a TRAIN uid of the pinned split (config.V3_EXPECTED_SPLIT_
+SHA256) -- any uid absent from the split's ``train_side_uids`` hard-fails
+naming it (split-rebuild-2026-08-01.md: no holdout concept exists in this
+split -- see ``load_split_uid_sets`` / ``assert_train_split_only``) -- and
+emits a box-shippable bundle: one ``{uid, regen_prompt}`` row per record,
+where ``regen_prompt`` is the pass@k wire prompt WITH a paper-derived hint
+appended (see ``build_regen_prompt``). No answer-key field, ever, in the
+bundle.
 
 **Interpreted deviation (orchestrator ruling, 2026-07-31, surfaced to
 Nicky in the window report; recorded here AND in every bundle manifest).** The skeleton's
@@ -172,7 +174,7 @@ resume). If it exists but the signature differs, this run refuses
 (``PublishConflictError``, naming the directory) UNLESS ``--force-new-dir``
 is given, in which case it publishes under the first available
 ``<dir>__N`` sibling instead -- NEVER overwriting or touching the original
-directory. This is not a guard bypass (no sha pin, holdout check, or
+directory. This is not a guard bypass (no sha pin, uid-membership check, or
 leakage guard is ever skippable by any flag in this module); it only
 resolves an output-location collision.
 
@@ -194,6 +196,23 @@ author filed alongside it):
   5. Restartability's exact ``--force-new-dir`` semantics -- this module's
      own design (the brief named the flag but not its precise behavior);
      documented above and in ``_resolve_publish_dir``.
+  6. Split rebuild (2026-08-01, docs/v3_full_run_skeleton.md P2,
+     split-rebuild-2026-08-01.md, Nicky's ruling): the old 200-train/
+     100-holdout split is VOID. The new split (config.V3_SPLIT_PATH /
+     V3_EXPECTED_SPLIT_SHA256) has NO holdout -- proof-bearing records are
+     train_side, proofless records are eval_pool. ``load_split_uid_sets``
+     now returns only a ``train_uids`` set (read from the split's
+     ``train_side_uids`` key); ``assert_train_split_only``'s holdout branch
+     (``LeakageError``) is retired, and its unknown-uid branch
+     (``UnknownUidError``) is now the ONLY offender class -- strengthened,
+     not weakened: a former-holdout uid, a proofless/eval uid, and a flat
+     typo all hit the exact same named refusal. ``assert_manifest_split_
+     pin`` additionally tolerates the OLD split's sha16
+     (config.EXPECTED_SPLIT_SHA256_16) at the manifest-provenance step ONLY
+     (config.V3_ACCEPTED_MANIFEST_SPLIT_SHA16S) -- solutions rows published
+     before the rebuild recorded the old sha and are still valid, verified,
+     proof-bearing records; the uid-membership guard is never relaxed by
+     this tolerance, it always checks the LIVE split's train_side_uids.
 """
 
 from __future__ import annotations
@@ -228,7 +247,7 @@ REGEN_BUNDLE_GUARD_STEPS = (
     "assert_manifest_split_pin",
     "assert_split_pinned[disk,reused=build_dataset.assert_split_pinned]",
     "load_solutions_rows",
-    "assert_train_split_only[holdout_or_unknown_hard_fail]",
+    "assert_train_split_only[unknown_hard_fail]",
     "assert_no_statement_leakage_exact[vs_eval_set.jsonl]",
     "build_regen_prompts[hint_marker+solution_text,suffix_terminal]",
     "assert_bundle_rows_well_formed[uid+regen_prompt_only,no_answer_key]",
@@ -242,7 +261,7 @@ BUILD_DATASET_GUARD_STEPS = (
     "assert_manifest_split_pin",
     "assert_split_pinned[disk,reused=build_dataset.assert_split_pinned]",
     "load_solutions_rows",
-    "assert_train_split_only[holdout_or_unknown_hard_fail]",
+    "assert_train_split_only[unknown_hard_fail]",
     "load_bundle[sha_verified]",
     "assert_bundle_solutions_sha_chain_link",
     "assert_bundle_uid_set_equals_solutions_train_uids",
@@ -274,12 +293,17 @@ class SolutionsIntegrityError(RuntimeError):
 
 
 class UnknownUidError(RuntimeError):
-    """A solutions-file uid is in neither the pinned split's train_uids nor
-    its holdout_uids -- solutions_v3.jsonl and the split have desynced.
+    """A solutions-file uid is not in the pinned split's ``train_side_uids``
+    -- solutions_v3.jsonl and the split have desynced.
 
-    Deliberately distinct from ``build_dataset.LeakageError`` (used for the
-    holdout case): an unknown uid is not proven to be eval-radioactive, it
-    is proven to be UNTRACKED by the split this module is pinned to.
+    RETIRED 2026-08-01 (split rebuild): the split has no holdout concept
+    any more, so this is now the ONLY offender class ``assert_train_split_
+    only`` raises -- a former-holdout uid, a proofless/eval_pool uid, and a
+    flat typo all hit this exact refusal, named. Kept as its own exception
+    type (rather than folded into ``SolutionsIntegrityError``) because the
+    failure mode is still distinct: an unknown uid is not proven to be
+    eval-radioactive, it is proven to be UNTRACKED by the split this module
+    is pinned to.
     """
 
 
@@ -447,7 +471,27 @@ def assert_solutions_sha_chain(solutions_path: Path, manifest_path: Path, manife
 
 def assert_manifest_split_pin(manifest: dict, manifest_path: Path, expected_split_sha16: str) -> None:
     """Hard-refuse unless the manifest's recorded split sha (16-hex,
-    tolerant lookup) matches the pinned split's sha16.
+    tolerant lookup) matches the pinned split's sha16 -- OR is a listed
+    provenance-era pin (see below).
+
+    Provenance-era tolerance (2026-08-01, split rebuild, orchestrator
+    decision): solutions_v3.jsonl rows published by proof-import BEFORE
+    the new split existed recorded the OLD split's sha16
+    (config.EXPECTED_SPLIT_SHA256_16, the now-VOID 200-train/100-holdout
+    split) under ``input_shas.split``. Those rows are still valid,
+    already-verified, 100%-endpoint-verified proof-bearing records --
+    forcing a re-publish under a corrected manifest just to update this
+    one field would be unneeded churn. This check therefore ALSO accepts
+    any sha16 explicitly listed in ``config.V3_ACCEPTED_MANIFEST_SPLIT_
+    SHA16S`` (today: the old split's sha16 and the current one), in
+    ADDITION to whatever ``expected_split_sha16`` the caller passed.
+
+    This tolerance is scoped to THIS provenance check ONLY. The actual
+    membership guard (``assert_train_split_only``) is never relaxed by it
+    -- it always checks the LIVE, pinned split's ``train_side_uids``,
+    regardless of which sha16 a manifest recorded here. A solutions row
+    from the old split era still hard-fails at that later guard if its uid
+    is not ALSO a member of the new split's train_side_uids.
     """
     recorded = _lookup_first(manifest, "split.sha256", "split_sha256", "split_sha16", "input_shas.split")
     if recorded is None:
@@ -456,29 +500,38 @@ def assert_manifest_split_pin(manifest: dict, manifest_path: Path, expected_spli
             "/ split_sha256 / split_sha16 / input_shas.split) -- manifest malformed."
         )
     recorded16 = str(recorded)[:16]
-    if recorded16 != expected_split_sha16:
+    accepted = {expected_split_sha16} | set(config.V3_ACCEPTED_MANIFEST_SPLIT_SHA16S)
+    if recorded16 not in accepted:
         raise SolutionsIntegrityError(
-            f"{manifest_path}: recorded split sha16={recorded16} != pinned "
-            f"config split sha16={expected_split_sha16} -- proof-import ran "
-            "against a different split than v3 is pinned to; refusing."
+            f"{manifest_path}: recorded split sha16={recorded16} not in the "
+            f"accepted set {sorted(accepted)!r} (pinned config split sha16="
+            f"{expected_split_sha16}, plus any listed provenance-era pins in "
+            "config.V3_ACCEPTED_MANIFEST_SPLIT_SHA16S) -- proof-import ran "
+            "against a split v3 does not recognize at all; refusing."
         )
 
 
-def load_split_uid_sets(split_path: Path, expected_split_sha256: str) -> tuple:
+def load_split_uid_sets(split_path: Path, expected_split_sha256: str) -> set:
     """Pin-check the split (reuses ``build_dataset.assert_split_pinned``)
-    then return ``(train_uids: set, holdout_uids: set)`` read directly off
-    the split JSON's own ``train_uids`` / ``holdout_uids`` keys.
+    then return ``train_uids: set`` read directly off the split JSON's own
+    ``train_side_uids`` key.
+
+    RETIRED 2026-08-01 (split rebuild, split-rebuild-2026-08-01.md): this
+    used to return ``(train_uids, holdout_uids)``. The new split
+    (proof-bearing/train_side vs proofless/eval_pool) has no holdout
+    concept at all, so there is nothing to return a second set for.
+    Callers that need to prove a solutions row is not eval-radioactive
+    rely entirely on ``assert_train_split_only``'s strengthened unknown-uid
+    hard-fail: any uid absent from ``train_side_uids`` refuses, named --
+    a former-holdout uid, a proofless/eval uid, or a typo all hit it alike.
     """
     split_path = Path(split_path)
     build_dataset.assert_split_pinned(split_path, expected_split_sha256)
     data = json.loads(split_path.read_text(encoding="utf-8"))
-    train_uids = set(data.get("train_uids") or [])
-    holdout_uids = set(data.get("holdout_uids") or [])
+    train_uids = set(data.get("train_side_uids") or [])
     if not train_uids:
-        raise ValueError(f"{split_path}: 'train_uids' is empty -- not a usable split")
-    if not holdout_uids:
-        raise ValueError(f"{split_path}: 'holdout_uids' is empty -- not a usable split")
-    return train_uids, holdout_uids
+        raise ValueError(f"{split_path}: 'train_side_uids' is empty -- not a usable split")
+    return train_uids
 
 
 def load_solutions_rows(solutions_path: Path) -> list:
@@ -508,28 +561,28 @@ def load_solutions_rows(solutions_path: Path) -> list:
     return rows
 
 
-def assert_train_split_only(rows, train_uids: set, holdout_uids: set, *, uid_key: str = "uid") -> None:
-    """Hard-refuse if any row's uid is a holdout uid (LeakageError) or is
-    unknown to the split entirely (UnknownUidError). Both checks collect
-    every offender before raising (never fail-fast on the first one).
+def assert_train_split_only(rows, train_uids: set, *, uid_key: str = "uid") -> None:
+    """Hard-refuse if any row's uid is not in ``train_uids`` (the frozen
+    split's ``train_side_uids``), naming every offender. Collects every
+    offender before raising (never fail-fast on the first one).
+
+    RETIRED 2026-08-01 (split rebuild, split-rebuild-2026-08-01.md): the
+    old holdout-uid branch (``build_dataset.LeakageError``, "HOLDOUT
+    uids") is gone -- the new split has no holdout concept, only
+    train_side_uids (proof-bearing) vs eval_set_uids (proofless). This
+    unknown-uid check is now the ONLY offender class, and it is
+    STRENGTHENED, not weakened: a former-holdout uid, a proofless/
+    eval-pool uid, and a flat typo all hit this exact same named refusal
+    -- there is no longer a softer way to be wrong.
     """
-    holdout_offenders = sorted({r[uid_key] for r in rows if r.get(uid_key) in holdout_uids})
-    if holdout_offenders:
-        raise build_dataset.LeakageError(
-            f"{len(holdout_offenders)} solutions-file uid(s) are HOLDOUT uids "
-            "-- a holdout proof on disk is the answer key crossing the split "
-            "(docs/proof_import_execution_skeleton.md section 2, rule 2): "
-            f"{_shown(holdout_offenders)}"
-        )
-    unknown_offenders = sorted(
-        {r[uid_key] for r in rows if r.get(uid_key) not in train_uids and r.get(uid_key) not in holdout_uids}
-    )
+    unknown_offenders = sorted({r[uid_key] for r in rows if r.get(uid_key) not in train_uids})
     if unknown_offenders:
         raise UnknownUidError(
             f"{len(unknown_offenders)} solutions-file uid(s) are not in the "
-            "pinned split at all (neither train_uids nor holdout_uids): "
-            f"{_shown(unknown_offenders)} -- solutions_v3.jsonl and the pinned "
-            "split (config.EXPECTED_SPLIT_SHA256) have desynced."
+            f"pinned split's train_side_uids: {_shown(unknown_offenders)} -- "
+            "solutions_v3.jsonl and the pinned split (config.V3_EXPECTED_"
+            "SPLIT_SHA256) have desynced, or this is a proofless/eval-pool "
+            "uid that must never appear in a training solutions file."
         )
 
 
@@ -672,10 +725,10 @@ def make_regen_bundle(
     solutions_sha256 = assert_solutions_sha_chain(solutions_path, manifest_path, manifest)
     assert_manifest_split_pin(manifest, manifest_path, expected_split_sha256[:16])
 
-    train_uids, holdout_uids = load_split_uid_sets(split_path, expected_split_sha256)
+    train_uids = load_split_uid_sets(split_path, expected_split_sha256)
 
     solutions_rows = load_solutions_rows(solutions_path)
-    assert_train_split_only(solutions_rows, train_uids, holdout_uids)
+    assert_train_split_only(solutions_rows, train_uids)
 
     if not eval_set_path.exists():
         raise SolutionsIntegrityError(f"{eval_set_path} not found -- cannot prove non-leakage")
@@ -699,8 +752,6 @@ def make_regen_bundle(
             raise BundleIntegrityError(f"built bundle row carries an answer-key-shaped field: {brow}")
         if config.V3_HINT_MARKER not in brow["regen_prompt"]:
             raise BundleIntegrityError(f"built bundle row for uid={brow['uid']} is missing the hint marker")
-        if brow[REQUIRED_BUNDLE_ROW_KEYS[1]] in holdout_uids:  # pragma: no cover - defensive, uids not prompts
-            pass
 
     content_bytes = _jsonl_bytes(bundle_rows)
     bundle_sha256 = _sha256_bytes(content_bytes)
@@ -758,12 +809,14 @@ def make_regen_bundle(
         "split": {
             "path": str(split_path),
             "sha256": expected_split_sha256,
-            "n_train_uids": len(train_uids),
-            "n_holdout_uids": len(holdout_uids),
-            "paper_overlap_train_holdout_note": (
-                "0 (independently derived twice by the 2026-07-31 inventory cross-check) -- "
-                "no paper-level leakage path exists in this split; the enforced "
-                "guards are uid-level (assert_train_split_only)."
+            "n_train_side_uids": len(train_uids),
+            "paper_disjointness_note": (
+                "train_papers ∩ eval_papers == ∅, asserted as a hard build-time invariant "
+                "of the split artifact itself (evalharness/data/corpus_split_v3_"
+                "proofsplit_20260801.json) -- paper-level disjointness is the load-bearing "
+                "guard there; this module's own runtime guard remains uid-level "
+                "(assert_train_split_only). No holdout concept exists in this split "
+                "(retired 2026-08-01, split-rebuild-2026-08-01.md)."
             ),
         },
         "eval_set": {"path": str(eval_set_path), "sha256": eval_set_sha256},
@@ -1142,10 +1195,10 @@ def build_dataset_cmd(
     solutions_sha256 = assert_solutions_sha_chain(solutions_path, manifest_path, manifest)
     assert_manifest_split_pin(manifest, manifest_path, expected_split_sha256[:16])
 
-    train_uids, holdout_uids = load_split_uid_sets(split_path, expected_split_sha256)
+    train_uids = load_split_uid_sets(split_path, expected_split_sha256)
 
     solutions_rows = load_solutions_rows(solutions_path)
-    assert_train_split_only(solutions_rows, train_uids, holdout_uids)
+    assert_train_split_only(solutions_rows, train_uids)
     solutions_by_uid = {r["uid"]: r for r in solutions_rows}
 
     bundle_rows, bundle_manifest = load_bundle(bundle_dir)
@@ -1330,10 +1383,14 @@ def build_dataset_cmd(
             "split": {
                 "path": str(split_path),
                 "sha256": expected_split_sha256,
-                "paper_overlap_train_holdout_note": (
-                    "0 (independently derived twice by the 2026-07-31 inventory cross-check) -- "
-                    "no paper-level leakage path exists in this split; the "
-                    "enforced guards are uid-level (assert_train_split_only)."
+                "n_train_side_uids": len(train_uids),
+                "paper_disjointness_note": (
+                    "train_papers ∩ eval_papers == ∅, asserted as a hard build-time invariant "
+                    "of the split artifact itself (evalharness/data/corpus_split_v3_"
+                    "proofsplit_20260801.json) -- paper-level disjointness is the load-bearing "
+                    "guard there; this module's own runtime guard remains uid-level "
+                    "(assert_train_split_only). No holdout concept exists in this split "
+                    "(retired 2026-08-01, split-rebuild-2026-08-01.md)."
                 ),
             },
             "eval_set": {"path": str(eval_set_path), "sha256": eval_set_sha256},
@@ -1522,6 +1579,25 @@ def validate_v3_config() -> None:
             "V3_HINT_INSUFFICIENT_POLICY must be one of "
             f"{config.VALID_V3_HINT_INSUFFICIENT_POLICIES} (got {config.V3_HINT_INSUFFICIENT_POLICY!r})"
         )
+    _hex64 = lambda s: isinstance(s, str) and len(s) == 64 and all(c in "0123456789abcdef" for c in s)
+    _hex16 = lambda s: isinstance(s, str) and len(s) == 16 and all(c in "0123456789abcdef" for c in s)
+    if not _hex64(config.V3_EXPECTED_SPLIT_SHA256):
+        problems.append(
+            f"V3_EXPECTED_SPLIT_SHA256 must be 64 lowercase hex chars (got {config.V3_EXPECTED_SPLIT_SHA256!r})"
+        )
+    if not _hex16(config.V3_EXPECTED_SPLIT_SHA256_16):
+        problems.append(
+            f"V3_EXPECTED_SPLIT_SHA256_16 must be 16 hex chars (got {config.V3_EXPECTED_SPLIT_SHA256_16!r})"
+        )
+    if (
+        not isinstance(config.V3_ACCEPTED_MANIFEST_SPLIT_SHA16S, tuple)
+        or not config.V3_ACCEPTED_MANIFEST_SPLIT_SHA16S
+        or not all(_hex16(s) for s in config.V3_ACCEPTED_MANIFEST_SPLIT_SHA16S)
+    ):
+        problems.append(
+            "V3_ACCEPTED_MANIFEST_SPLIT_SHA16S must be a non-empty tuple of 16-hex-char str "
+            f"(got {config.V3_ACCEPTED_MANIFEST_SPLIT_SHA16S!r})"
+        )
     if problems:
         raise config.ConfigError(
             f"{len(problems)} configuration problem(s) in loratrain/v3.py's V3 constants:\n"
@@ -1555,7 +1631,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--manifest", type=Path, default=None,
         help="Path to the solutions file's manifest.json (default: its sibling manifest.json).",
     )
-    b.add_argument("--split", type=Path, default=config.EVAL_PAPER_SPLIT_PATH, help="Path to the pinned split file.")
+    b.add_argument("--split", type=Path, default=config.V3_SPLIT_PATH, help="Path to the pinned split file.")
     b.add_argument("--eval-set", type=Path, default=config.EVAL_SET_PATH, help="Path to eval_set.jsonl.")
     b.add_argument(
         "--bundle-dir", type=Path, required=True,
@@ -1574,7 +1650,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     d.add_argument("--manifest", type=Path, default=None, help="Path to the solutions file's manifest.json (default: its sibling manifest.json).")
     d.add_argument("--rollouts", type=Path, required=True, help="Box regen outputs: jsonl of {uid, sample_idx, output}.")
-    d.add_argument("--split", type=Path, default=config.EVAL_PAPER_SPLIT_PATH, help="Path to the pinned split file.")
+    d.add_argument("--split", type=Path, default=config.V3_SPLIT_PATH, help="Path to the pinned split file.")
     d.add_argument("--eval-set", type=Path, default=config.EVAL_SET_PATH, help="Path to eval_set.jsonl.")
     d.add_argument("--corpus", type=Path, default=config.CORPUS_PATH, help="Path to band_corpus.jsonl (source-tier resolution, authoritative for 'band').")
     d.add_argument(
@@ -1612,7 +1688,7 @@ def main(argv=None) -> int:
             solutions_path=args.solutions,
             manifest_path=manifest_path,
             split_path=args.split,
-            expected_split_sha256=config.EXPECTED_SPLIT_SHA256,
+            expected_split_sha256=config.V3_EXPECTED_SPLIT_SHA256,
             eval_set_path=args.eval_set,
             bundle_dir=args.bundle_dir,
             k_regen=config.V3_K_REGEN,
@@ -1632,7 +1708,7 @@ def main(argv=None) -> int:
             manifest_path=args.manifest or (args.solutions.parent / "manifest.json"),
             rollouts_path=args.rollouts,
             split_path=args.split,
-            expected_split_sha256=config.EXPECTED_SPLIT_SHA256,
+            expected_split_sha256=config.V3_EXPECTED_SPLIT_SHA256,
             eval_set_path=args.eval_set,
             corpus_path=args.corpus,
             expected_corpus_sha256=config.EXPECTED_CORPUS_SHA256,

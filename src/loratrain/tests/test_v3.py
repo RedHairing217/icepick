@@ -63,7 +63,12 @@ def _corpus_pin(path: Path):
 
 
 TRAIN_UIDS = ["t0", "t1", "t2", "t3"]
-HOLDOUT_UIDS = ["h0", "h1"]
+# Shaped like the OLD split's holdout uids -- kept only to prove the
+# retirement (split rebuild, 2026-08-01) was done cleanly: a uid that WOULD
+# have been holdout under the old split now hits the exact same
+# UnknownUidError as any other stranger uid, never a special LeakageError
+# path. See test_former_holdout_shaped_uid_now_hits_unknown_uid_hard_fail.
+FORMER_HOLDOUT_SHAPED_UIDS = ["h0", "h1"]
 
 # (question, solution_text, answer, arxiv_id) for the 4 base train uids.
 SOLUTION_SPECS = {
@@ -147,19 +152,20 @@ def _default_rollouts():
 def env(tmp_path):
     """A fully valid, hermetic v3 environment under ``tmp_path``.
 
-    4 train uids (t0-t3, all with solutions rows), 2 holdout uids (h0,h1);
-    t0 is band-tier via band_corpus membership (and ALSO appears in the
+    4 train uids (t0-t3, all with solutions rows) -- the split rebuild
+    (2026-08-01) has NO holdout concept, only ``train_side_uids``
+    (proof-bearing) vs an eval pool this module never reads; t0 is
+    band-tier via band_corpus membership (and ALSO appears in the
     wellposed pool with a CONFLICTING "collapse" label -- band_corpus must
     win, see ``test_tier_resolution_*``); t1/t2 resolve via the pool
     (collapse / misdirection, both -> collapse bucket); a 6-row v2/cap1
     anchor pool with uids disjoint from t0-t3. Individual tests mutate one
     piece (rewrite a file, override one kwarg) to exercise a refusal path.
     """
-    split_path = tmp_path / "evalharness" / "data" / "corpus_split_200_100.json"
+    split_path = tmp_path / "evalharness" / "data" / "corpus_split_v3_proofsplit_20260801.json"
     _write_json(split_path, {
-        "train_uids": list(TRAIN_UIDS),
-        "holdout_uids": list(HOLDOUT_UIDS),
-        "eval_papers": ["9999.00001"],
+        "ruling": "fixture -- mirrors the real split's proof-bearing/proofless schema, no holdout",
+        "train_side_uids": list(TRAIN_UIDS),
     })
     split_sha256 = _sha256(split_path)
 
@@ -241,7 +247,7 @@ def _add_offtier_uid(env, uid="t4", label="solved") -> str:
     manifest + pool in lockstep so every sha stays consistent.
     """
     split_data = json.loads(env["split_path"].read_text(encoding="utf-8"))
-    split_data["train_uids"] = split_data["train_uids"] + [uid]
+    split_data["train_side_uids"] = split_data["train_side_uids"] + [uid]
     _write_json(env["split_path"], split_data)
     env["expected_split_sha256"] = _sha256(env["split_path"])
 
@@ -369,11 +375,47 @@ def test_manifest_split_sha_mismatch_refusal(env):
         _make_bundle(env)
 
 
-def test_holdout_uid_in_solutions_hard_fail(env):
+def test_manifest_split_pin_accepts_old_era_split_sha16(env):
+    # Provenance-era tolerance (split rebuild, 2026-08-01, v3.py's
+    # assert_manifest_split_pin docstring): a solutions manifest recorded
+    # under the OLD (now-void) 200/100 split's sha16 must still pass the
+    # manifest-pin step -- config.V3_ACCEPTED_MANIFEST_SPLIT_SHA16S lists
+    # it explicitly. This is the REAL production old-split sha16, not a
+    # fixture-local value, to pin against regressions in that literal.
+    assert config.EXPECTED_SPLIT_SHA256_16 in config.V3_ACCEPTED_MANIFEST_SPLIT_SHA16S
+    _write_json(env["manifest_path"], {
+        "solutions_v3": {"sha256": env["solutions_sha256"]},
+        "split": {"sha256": config.EXPECTED_SPLIT_SHA256_16},
+    })
+    _make_bundle(env)  # must NOT raise
+    assert (env["bundle_dir"] / "regen_bundle.jsonl").exists()
+
+
+def test_manifest_split_pin_still_refuses_a_wholly_unrecognized_sha16(env):
+    # The old-era tolerance is a small, explicit allow-list, not a general
+    # loosening -- an sha16 that is neither the live pin nor a listed
+    # provenance-era pin must still refuse (this is test_manifest_split_
+    # sha_mismatch_refusal's scenario, re-asserted here to document WHY it
+    # still refuses now that a tolerance list exists at all).
+    assert "f" * 16 not in config.V3_ACCEPTED_MANIFEST_SPLIT_SHA16S
+    _write_json(env["manifest_path"], {
+        "solutions_v3": {"sha256": env["solutions_sha256"]},
+        "split": {"sha256": "f" * 64},
+    })
+    with pytest.raises(v3.SolutionsIntegrityError, match="not in the accepted set"):
+        _make_bundle(env)
+
+
+def test_former_holdout_shaped_uid_now_hits_unknown_uid_hard_fail(env):
+    # Split rebuild (2026-08-01): there is no holdout concept any more, so
+    # a uid shaped like the OLD split's holdout set is just another
+    # stranger uid -- it must hit the SAME UnknownUidError as "ghost"
+    # below, never a special LeakageError "HOLDOUT" path (that branch is
+    # retired -- see assert_train_split_only's docstring).
     _append_solutions_row(env, _solutions_row(
-        "h0", question="Holdout Q.", solution_text="Holdout sol \\boxed{9}.", answer="9", arxiv_id="1000.0h0",
+        "h0", question="Former-holdout-shaped Q.", solution_text="Sol \\boxed{9}.", answer="9", arxiv_id="1000.0h0",
     ))
-    with pytest.raises(build_dataset.LeakageError, match="HOLDOUT"):
+    with pytest.raises(v3.UnknownUidError, match="not in the pinned split"):
         _make_bundle(env)
 
 
@@ -403,7 +445,7 @@ def test_bundle_statement_leakage_exact_hard_fail(env):
 # ============================================================================
 
 
-def test_bundle_rows_well_formed_no_answer_key_no_holdout(env):
+def test_bundle_rows_well_formed_no_answer_key(env):
     manifest = _make_bundle(env)
     rows = _read_jsonl(manifest["bundle"]["path"])
     assert len(rows) == len(TRAIN_UIDS)
@@ -414,7 +456,7 @@ def test_bundle_rows_well_formed_no_answer_key_no_holdout(env):
         assert config.V3_HINT_MARKER in row["regen_prompt"]
     bundle_uids = {r["uid"] for r in rows}
     assert bundle_uids == set(TRAIN_UIDS)
-    assert not (bundle_uids & set(HOLDOUT_UIDS))
+    assert not (bundle_uids & set(FORMER_HOLDOUT_SHAPED_UIDS))
 
 
 def test_bundle_atomic_publish_verify_fail_leaves_no_final_artifacts(env, monkeypatch):

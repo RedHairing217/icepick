@@ -606,3 +606,49 @@ VALID_V3_HINT_INSUFFICIENT_POLICIES = ("drop_and_census",)
 # corpus/split pins above) -- v3.py records this file's live sha in its
 # manifest rather than pre-pinning an unverified number.
 V3_WELLPOSED_POOL_PATH = REPO_ROOT / "out/corpus_pde625/wellposed_all_with_passk.json"
+
+# --- v3-fullrun split rebuild (2026-08-01, docs/v3_full_run_skeleton.md P2)
+# -----------------------------------------------------------------------
+# RETIRE-NOTE: EXPECTED_SPLIT_SHA256 / EXPECTED_SPLIT_SHA256_16 /
+# EVAL_PAPER_SPLIT_PATH above (lines ~81-82, ~269) are now VOID for v3 --
+# Nicky's 2026-08-01 ruling retired the old 200-train/100-holdout
+# band-vs-band-holdout carve-out entirely, in favor of a proof-bearing
+# (train) / proofless (eval) rule over the full 921-record
+# band+collapse+misdirection universe. There is no holdout concept in the
+# new split at all (see v3.py's load_split_uid_sets / assert_train_split_
+# only, whose holdout branch is retired accordingly -- the unknown-uid
+# hard-fail is kept and strengthened: it is now the ONLY offender class).
+# The old constants above are left byte-identical, per instruction --
+# historical (pre-v3) arms, build_dataset.py, and upload_guard.py are
+# still pinned to them and must keep working unchanged.
+V3_SPLIT_PATH = REPO_ROOT / "evalharness/data/corpus_split_v3_proofsplit_20260801.json"
+
+# Frozen 2026-08-01 (P2 split-build session). 921-record 3-tier universe
+# (band 317 / collapse 405 / misdirection 199) classified proof-bearing
+# (train_side, 187/217/87) vs proofless (eval_pool); train_allocated_uids
+# take all 187 band + 87 misdirection + a ranked 194-of-217 collapse
+# (sha256("v3-fullrun:collapse-alloc:v1:"+uid) ascending); eval_set_uids
+# take all eligible proofless band, a ranked 97 collapse, a ranked 96
+# misdirection, each AFTER excluding (a) live ungradeable-by-name records
+# and (b) any proofless record whose paper also hosts any train-side
+# record (paper-level disjointness -- the load-bearing guard; uid-level
+# alone is not sufficient). See the split artifact's own "composition" and
+# "notes" blocks for the full reconciliation receipts, including why the
+# achieved eval total (286) fell short of the original 322 target (~100%
+# paper-conflict, not defect) and the band_corpus-precedence / verifier-fix
+# judgment calls made while building it.
+V3_EXPECTED_SPLIT_SHA256 = "69735899efe9270e175b54cb39c11f6aed0f245524dd321a930fcdee8893761d"
+V3_EXPECTED_SPLIT_SHA256_16 = V3_EXPECTED_SPLIT_SHA256[:16]  # DERIVED -- same convention as EXPECTED_SPLIT_SHA256_16 above; V3_EXPECTED_SPLIT_SHA256 is the single source of truth.
+
+# Manifest-provenance tolerance (2026-08-01, orchestrator decision -- see
+# v3.py's assert_manifest_split_pin docstring for the full reasoning): a
+# solutions_v3.jsonl manifest published by proof-import BEFORE this split
+# existed recorded the OLD split's sha16 (EXPECTED_SPLIT_SHA256_16) under
+# input_shas.split -- those rows are still valid, already-verified
+# proof-bearing records, and forcing a re-publish under a corrected
+# manifest is unneeded churn. Consulted ONLY at the manifest-pin
+# provenance step, in ADDITION to whatever sha16 the caller is currently
+# pinned to; it never weakens the uid-membership guard
+# (assert_train_split_only), which always checks the LIVE split's
+# train_side_uids regardless of which sha16 a manifest recorded here.
+V3_ACCEPTED_MANIFEST_SPLIT_SHA16S = (EXPECTED_SPLIT_SHA256_16, V3_EXPECTED_SPLIT_SHA256_16)
