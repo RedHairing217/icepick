@@ -1,235 +1,198 @@
 # Gate-crossing scoring spec — the campaign's success metric
 
-**Ruled by Nicky, 2026-08-01. This is the authoritative definition.** Any future window
-scoring an arm against a base ruler uses THIS document. It supersedes aggregate
-pass-rate and mean-delta comparisons for headline purposes.
+**Ruled by Nicky 2026-08-01; REVISED same day after an adversarial review found a
+gate/code contradiction and an uncalibrated null. This is the authoritative
+definition.** Any window scoring an arm against a base ruler uses THIS document.
+Supersedes aggregate pass-rate and mean-delta comparisons for headline purposes.
 
 ## Why this replaced the old metric
 
 The k=8 sweep showed adapters moving 6–13 band records up to solved while pushing 4–10
 down to collapse — flows that nearly cancel, so a mean delta reported ≈0 and hid both.
-Counting **problems that cross gates** keeps the two flows visible. It also matches the
-mission: the claim is about which problems became solvable, not about an aggregate rate.
+Counting **problems that cross gates** keeps both flows visible, and matches the mission:
+the claim is about which problems became solvable, not about an aggregate rate.
 
-## Definitions
+## Labels — from the code, at both sample counts
 
-Gates come from `src/icepick/contracts/records.py`: `BAND_LO = 0.125`,
-`BAND_HI = 0.75`. At k=8:
+`src/icepick/contracts/records.py`: `BAND_LO = 0.125`, `BAND_HI = 0.75`, applied as
+`BAND_LO <= pass_at_k <= BAND_HI` (`is_band`, records.py:105-110; `scoring.in_band`
+reuses the same constants). **The rate is pinned, so count boundaries move with k:**
 
-| label | n_correct of 8 |
-|---|---|
-| `fail` (collapse or misdirection) | 0 |
-| `band` | 1–6 |
-| `solved` | 7–8 |
+| label | k=8 | **k=16** |
+|---|---|---|
+| `fail` (collapse or misdirection) | 0 | **0–1** |
+| `band` | 1–6 | **2–12** |
+| `solved` | 7–8 | **13–16** |
 
-**`solved` records are unscored instrument guards** (the old anchor role) — they can
-only regress, so scoring them would inject one-directional noise. They are watched, not
-counted.
+> **REVISION — blocking fix #1.** An earlier draft used "0/16 = fail, ≥1/16 = pass",
+> silently halving `BAND_LO` to 0.0625. **1/16 = 0.0625 is below the band floor; the
+> codebase labels it `fail`.** Not cosmetic — the wrong gate generated a systematic
+> −9.8-per-100 drift on a null arm (see "Why the code gate also fixes the null").
+
+## Sample counts — pinned
+
+- **Base ruler: k=16**, delivered as **two independent k=8 passes** (the halves are
+  reused as free A/A calibration). Measured once, reused by every arm.
+- **Arms: k=8 first pass**, plus a second independent k=8 pass (pooled to 16) wherever
+  the decision is live.
+- Where an arm is not rerun, compare against the base's **first 8 only** — like-for-like
+  always. Never arm@8 vs base@16.
 
 ## Scoring — integers only, max ±1 per problem
 
-Counting PROBLEMS, not passes. A problem that both crosses a gate and moves ≥4/16
-still scores ±1, never ±2.
+Counting PROBLEMS, not passes. A problem crossing a gate *and* moving ≥4/16 still scores
+±1, never ±2.
 
-| transition | score |
+| transition (k=16 labels) | score |
 |---|---|
-| `fail` → `band` or `solved` | **+1** — no rerun, ever |
+| `fail` → `band` or `solved` | **+1** |
 | `band` → `solved` | **+1** |
 | `band` → `band`, Δ ≥ **+4/16** | **+1** |
-| `band` → `fail` | **−1** (rerun if base ≤4/16) |
+| `solved` → `band` or `fail` | **−1** |
+| `band` → `fail` | **−1** |
 | `band` → `band`, Δ ≤ **−4/16** | **−1** |
-| anything else (Δ of 1, 2 or 3 of 16) | **0** |
+| otherwise (|Δ| ≤ 3/16, no gate crossed) | **0** |
 
-All thresholds are on the 16-scale. No halving, no rounding, no 8-scale conversion.
-**A change of 1, 2 or 3 of 16 is NULL** — only a ≥4/16 move (25 percentage points)
-scores on the magnitude criterion.
+All thresholds on the 16-scale. No halving, no rounding, no 8-scale conversion.
+Outcomes are **computed** from pooled values against this table, never asserted per row.
 
-## Confirmation reruns
+## Reruns
 
-A **second independent k=8 pass** (NOT a single k=16 run), pooled with the first to give
-16 samples. Fires for:
+A second independent k=8 pass, pooled to 16. Fires for:
 
-- **all `band` → `band` records** (base band, arm still band) — the largest bucket, and
-  where the ±4/16 magnitude rule lives, so it is where the extra samples buy the most
-- **`band` → `fail` demotions from LOW band** (base ≤4/16, i.e. the old 1/8 or 2/8)
+- **all `band` → `band` records** — the largest bucket, where the ±4/16 rule lives
+- **any fail/band boundary crossing in either direction** — base `fail` with arm ≥1
+  correct, or base `band` with arm ≤1/8. Under the code gate these are **not** vacuous:
+  a first-8 of exactly 1 sits at 1/16 and needs another success to reach the 2/16 floor.
 
-**Excluded from rerun** (Nicky, explicit): `fail` records that improved, `band` records
-that reached `solved`, and collapses from base ≥6/16 (the old 3–6/8) straight to 0/8.
-In each the outcome is already decided and a rerun cannot realistically change it —
-a base ≥6/16 dropping to 0/8 scores −1 whether the arm's pooled value lands at 0, 1 or
-3 of 16.
+No rerun where the outcome cannot change: `band` → `solved`, and collapses from base
+≥6/16 straight to 0/8.
 
-**Promotions are never rerun** (Nicky, 2026-08-01 — the test is vacuous). If a
-previously-`fail` record's first 8 produced ≥1 correct, the pooled 16 is ≥1/16 by
-construction regardless of the rerun, and the promotion override credits +1 either way.
-The rerun cannot change its own outcome, so it is pure waste. **fail → ≥1/8 scores +1
-directly.**
+> **REVISION — fixes #9, #10.** The earlier "−1 iff pooled = 0/16" was false: base 4/16
+> with a 0/8 first pass and 8/8 fresh pass pools to 8/16, Δ=+4, scoring **+1**. The old
+> scope also left **base = 5/16 unruled**; the boundary rule above covers all bases.
 
-Because the demotion rerun is scoped to an *exact* value (tuned first-8 = 0), the pooled
-threshold is algebraically identical to a clean test on the fresh 8, so reusing the
-flagging sample introduces no selection bias: pooled 0/16 ⟺ fresh 8 shows 0.
+**The pooled 16 OVERRIDES the initial 8** for any rerun record — authoritative for
+scoring, reporting and labelling.
 
-**The pooled 16 OVERRIDES the initial 8 (Nicky, 2026-08-01).** For any record that was
-rerun, the 16-sample measurement is the authoritative tuned value — it supersedes the
-0/8 for scoring, for reporting, and for any label assigned to that record. More samples
-is the better estimate.
+⚠ **Do not feed rerun-upgraded values into an aggregate mean.** Reruns now cover all
+band→band records plus boundary crossings, so the mixed-precision set is large and its
+selection is two-sided (band→band conditions on first-8 ∈ 1–6, truncating both tails).
+Report aggregates from first-pass k=8 values only, or state the conditioning.
 
-⚠ **Do not feed the upgraded values into an aggregate mean.** Reruns are triggered
-exclusively by LOW measurements (tuned 0/8), so only an arm's unluckiest records get
-re-measured, and regression to the mean pushes them up. That is harmless for the
-gate-crossing count (decided per-problem against fixed thresholds) but would
-systematically inflate any secondary statistic — mean n_correct, aggregate pass rate —
-computed from the mixed-precision set. Report such aggregates from the first-pass
-k=8 values only, or state the bias explicitly.
+## Why the code gate also fixes the null
 
-The demotion rerun does real work — both low-band cases have a live decision boundary
-(base shown at 16-scale, arm's first pass was 0/8):
+Under the discarded `≥1/16 = pass` gate a promotion fired on **one** lucky sample while a
+demotion required **zero in sixteen** — rates that diverge sharply at low p, exactly
+where the binding tier lives. Measured drift on a **null arm** (arm ≡ base), per 100:
 
-| base | arm pooled | gate | Δ | score |
-|---|---|---|---|---|
-| 2/16 | 0/16 | **fail** | −2 | **−1** (gate) |
-| 2/16 | ≥1/16 | pass | ≤−1 | **0** |
-| 4/16 | 0/16 | **fail** | −4 | **−1** (gate + magnitude) |
-| 4/16 | ≥1/16 | pass | ≤−3 | **0** |
+| true p | discarded gate | **code gate** |
+|---|---|---|
+| 0.05 | **−9.8** | **+0.0** |
+| 0.10 | −4.5 | −0.0 |
+| 0.125 | −2.7 | −0.0 |
+| 0.25 | −0.1 | +0.0 |
 
-Under the ±4/16 threshold both low-band cases reduce to the SAME rule: **−1 if and only
-if the arm's pooled value is 0/16.** A 4/16 → 1/16 slide is Δ=−3, below the magnitude
-bar, and 1/16 is a pass, so it scores 0.
+The code-faithful gate makes the two directions mirror images and **centres the null at
+zero at every p**. The earlier "largely cancels" claim was false under the old gate and
+is true under this one.
 
-> **Supersession note.** An earlier draft ruled that a base of 2/8 (=4/16) dropping to
-> 1/16 scored −1. Raising the magnitude bar from 3/16 to 4/16 superseded that: Δ=−3 is
-> now null. Confirmed by Nicky 2026-08-01. This is a deliberate change, not a bug — a
-> future reader finding the old rule quoted elsewhere should treat THIS document as
-> authoritative.
+## Calibration — A/A from the base's own halves
 
-## Scoring — everything stays on the 16-scale
+The remaining asymmetries mean the sign test's null of P(+1) = P(−1) is not guaranteed
+by construction. Calibrate empirically instead of assuming:
 
-**Nicky, 2026-08-01: "maintain x/16."** (An initial ±3/16 bar was superseded by
-±4/16 after the analysis below.) No
-conversion to the 8-scale, no halving, no rounding — which eliminates the ~0.25-point
-downward bias that odd-rounds-down would have introduced.
+**Score the base ruler's two independent k=8 halves against each other under these exact
+rules.** Same instrument, same session, genuinely independent, zero extra compute. That
+gives the empirical null for the net score and for promotion/demotion counts. Report the
+observed net against that null, not against an assumed zero.
 
-**Base is therefore measured at k=16** so both sides share scale AND precision. (An
-8-sample base doubles to even 16-values exactly, but carries different variance; the
-k=16 base costs ~1920 generations ONCE and is reused by every arm. Overridable, but
-this is the spec default.)
+(Do NOT use the corpus's original rescore as the second measurement — different era,
+engine and serving config, so not a clean A/A.)
 
-**1. Gate (is it fail?)** — **0/16 = fail, ≥1/16 = pass.** One success in sixteen still
-proves the problem is reachable. Crossing the gate in either direction scores ±1.
+## Significance — convention DECLARED
 
-**2. Magnitude** — **|Δ| ≥ 4/16 scores ±1** (Nicky, 2026-08-01, chosen from a measured
-false-positive/power analysis — see below). Δ of 1, 2 or 3 is **null**.
+Non-zero problems form a distribution-free **sign test**: net count is the effect size,
+sign test the p-value.
 
-Score ±1 if **either** criterion fires; never ±2. Worked cases:
+**Convention: two-sided, α = 0.05.** Binding. The record has carried the same v1 result
+as both `.344` (two-sided) and `.17` (one-sided); two-sided is conservative and is what a
+skeptic applies. Report one-sided alongside if useful; the headline is two-sided.
 
-| base | tuned | gate | Δ | score |
-|---|---|---|---|---|
-| 2/16 | 1/16 | pass | −1 | **0** |
-| 2/16 | 0/16 | **fail** | −2 | **−1** (gate) |
-| 4/16 | 1/16 | pass | −3 | **0** |
-| 4/16 | 0/16 | **fail** | −4 | **−1** (gate + magnitude) |
-| 8/16 | 4/16 | pass | **−4** | **−1** (magnitude) |
-| 8/16 | 5/16 | pass | −3 | **0** |
-| 6–12/16 | 0/16 | **fail** | ≥−6 | **−1** (no rerun needed) |
-| 0/16 | ≥1/16 | **pass** | ≥+1 | **+1** (promotion override) |
+**Multiplicity / cross-arm.** The base ruler is measured once and reused, so base
+sampling error is a **common-mode systematic**: per-arm p-values are NOT independent, and
+arm-vs-arm differences have smaller variance than arm-vs-base (shared error partly
+cancels). With multiple arms, pre-register a single primary comparison or apply an
+explicit correction, and say which. Never rank arms on holdout score and then report the
+winner's p-value as if pre-registered.
 
-### Why 4/16 and not 2/16 or 3/16
+## The `solved` guard — scored, asymmetry named
 
-Measured on our own setup (base and arm both Binomial(16, p)), all three thresholds are
-**statistically equivalent** — power ÷ noise is 0.137 / 0.145 / 0.148 respectively, a
-dead heat, because a looser bar catches more real moves and more fake ones in the same
-proportion. The tiebreaker is defensibility:
+Earlier drafts left `solved` unscored "because they can only regress". That was
+backwards: **excluding them creates the bias it claims to prevent** — band→solved scores
++1 while solved→band scores 0, so gains into the guard set count and losses out do not.
+The 30% measured label drift guarantees the base ruler places real records in `solved`.
 
-| | Δ≥2/16 | Δ≥3/16 | **Δ≥4/16** |
-|---|---|---|---|
-| false-positive rate at p=8/16 | 59.7% | 37.7% | **21.5%** |
-| power vs a real +3/16 gain | 71% | 58% | 43% |
-| net noise over ~50 band→band records | ±5.2 | ±4.0 | **±2.9** |
+**Resolution: `solved` → `band`/`fail` scores −1**, making the boundary symmetric.
+`solved` records additionally serve as an instrument guard with an operational trigger:
+**if >20% of base-`solved` records regress in any arm, treat the run as suspect and
+investigate before reporting.**
 
-At 2/16 roughly 60% of band records flip by chance; the flips cancel so the net stays
-unbiased, but the report would read "47 improved, 44 degraded, net +3" with ~27 of the
-91 being coin flips — exactly the failure mode this campaign has already hit three
-times. At 4/16 the claim is "problems whose solve rate moved ≥25 percentage points",
-with ~21% chance-driven.
+## Missing data
 
-**Caveat ACCEPTED by Nicky (2026-08-01) as expected behaviour, not a problem:**
-measured per-record effects in this campaign have been tiny (aggregate ≈ +1.7pp ≈
-0.3/16), so the magnitude criterion will rarely fire for genuine reasons at ANY
-threshold. **The bulk of the score is expected to originate from GATE CROSSINGS, not
-band fluctuation.**
+Generation failures, grading errors, timeouts: **exclude pairwise and report the count.**
+Never silently score 0 — a dropped record and an unchanged record are different, and
+three silent instrument bugs in this project have shown how easily that difference
+disappears.
 
-A rare ≥4/16 intra-band move counts **exactly the same as a gate crossing** (+1 or −1)
-— not weighted differently, not treated as a lesser event. This makes the design intent
-explicit: the metric counts **problems whose solvability status changed**, with large
-intra-band moves admitted as a secondary route to the same conclusion.
+## Independence of the two passes
 
-**Report gate crossings and magnitude moves as separate lines** — not because one is
-more valid, but so the source of the result stays visible. If a verdict ever rests
-mainly on intra-band fluctuation, treat it with suspicion given the 21.5% chance-flip
-rate at this threshold.
+Same serving configuration (engine build, `-fa off`, flags, temperature 0.7,
+max_tokens 2048) and a **different sampling seed**, with both passes' configs recorded in
+the run manifest. Passes must differ ONLY in sampling randomness — a fourth place a
+silent instrument difference could enter.
 
-### Promotion override — the one intentional asymmetry
+## Ungradeable records
 
-A previously-`fail` record reaching **1/16 scores +1**, even though Δ = +1 is below the
-±4/16 magnitude bar. The gate criterion carries it. Rationale (Nicky): going from
-*never* solvable to *sometimes* solvable is the capability change the curriculum is
-buying — "luck can allow a solve, when previously the problem was fully out of scope."
-Note this is not symmetric with the demotion side, where a 2/16 → 1/16 slide scores 0.
-
-This is deliberate and documented, not an artifact.
+21 records in the three-tier scope carry `fail` labels that are artifacts of
+`simplify(oo−oo) = nan` (`verifier-self-verify-defect.md`), not difficulty. They **can
+never promote**, so they add permanent null mass and dilute the sign test. **Exclude them
+by name from the scored set and report the count.** (The old 120-record eval measured
+0/120 clean, so prior numbers were unaffected; a newly built eval set must be screened.)
 
 ## Binding preconditions
 
-1. **"Before" labels MUST come from a fresh base ruler measured in the same sweep —
-   never corpus labels.** Measured label drift is 30%: of a nominal "100 band" holdout,
-   only 70 still measured band at k=8 (16 had drifted to solved, 14 to fail). Scoring
-   against corpus labels would credit drift as improvement.
-2. Base and tuned arms must use an identical serving configuration — same engine build,
-   same `-fa off`, same flags. Three separate silent instrument bugs (`-fa auto`,
-   CUDA-vs-Metal, missing `antlr4`) have already corrupted or nearly corrupted results.
-3. Grading must run where `antlr4-python3-runtime` is installed, and any re-homed
-   grader needs a byte-parity receipt against a known-good config before its numbers
-   are trusted.
+1. **"Before" labels MUST come from a fresh base ruler in the same sweep — never corpus
+   labels.** Measured label drift is 30%.
+2. Base and arms must use identical serving configuration. Three silent instrument bugs
+   (`-fa auto`, CUDA-vs-Metal, missing `antlr4`) have already corrupted or nearly
+   corrupted results.
+3. Grading must run where `antlr4-python3-runtime` is installed; any re-homed grader
+   needs a byte-parity receipt against a known-good config first.
 
-## Known statistical properties (pre-registered, not discovered later)
+## Known statistical properties
 
-- **Noise floor at k=16 with the ±4/16 threshold.** |Δ| ≥ 4 fires **21.5%** of the time
-  by chance at p=8/16 (16.3% averaged across the band range). On ~50 band→band records
-  that is ~8 spurious flips, ~4 each way — **net SD ≈ ±2.9**. Treat |net| ≲ 6 as
-  indistinguishable from zero on the magnitude criterion. Gate crossings carry their
-  own, smaller noise.
-- **0/8 ≠ p=0.** A record at true p=0.1 measures 0/8 about 43% of the time, so some
-  fail→band promotions are remeasurement artifacts. Largely cancels against band→fail
-  demotions at the same boundary.
-- **Confirmation tilt.** At true p=0.125 a promotion confirms ~66% of the time, a
-  demotion ~34% — roughly 2×, Nicky's explicit choice ("avoid unlucky seeds dragging
-  result down"). Report a symmetric-bar sensitivity check beside the headline so the
-  tilt is visible rather than load-bearing.
+- **Magnitude-criterion noise.** |Δ| ≥ 4/16 fires ~21.5% by chance at p=8/16 (~16.3%
+  averaged across the band range). On ~50 band→band records that is ~8 spurious flips,
+  ~4 each way — net SD ≈ **±2.9**. Treat |net| ≲ 6 as indistinguishable from zero on
+  magnitude alone. **Caveat:** those are *unconditional* figures; the band→band pooled 16
+  is conditioned on its first 8 landing in 1–6, compressing variance, so realised
+  false-positive rate and power are both somewhat lower. **The A/A calibration measures
+  the true rate — prefer it over this table.**
+- **Expected source of signal.** Per-record effects have been ~0.3/16, so the magnitude
+  criterion will rarely fire for genuine reasons. **The bulk of the score is expected
+  from gate crossings.** A rare ≥4/16 intra-band move counts exactly the same. **Report
+  the two as separate lines**; a verdict resting mainly on intra-band fluctuation should
+  be distrusted.
 
-## Significance
+## Threshold choice: why 4/16
 
-Every problem contributes +1 / 0 / −1, so the non-zero problems form a natural
-distribution-free **sign test**: net count is the effect size, sign test is the
-p-value, both from one pass. Declare the one/two-sided convention explicitly — the
-record has previously carried the same result as both `.344` (two-sided) and `.17`
-(one-sided).
-
-## Open item, not yet ruled
-
-The base arm is single-measured, so a promotion compares base@8 against tuned@16 and
-inherits a precision asymmetry. Fix is cheap and shared across arms: **one extra k=8
-pass on the BASE over the union of records flagged by any arm.** With it, both arms sit
-at 16 samples wherever the decision is close, making the metric symmetric in precision
-as well as in rule.
-
-## Free strengthening available
-
-The corpus carries an independent k=8 measurement of every record from the original
-rescore. Records measuring 0/8 in **both** that rescore and the fresh base ruler are
-"confirmed fail" — promotions out of those are the strongest evidence available, and it
-costs only a join, no compute.
+2/16, 3/16 and 4/16 are statistically equivalent — power ÷ noise = 0.137 / 0.145 / 0.148,
+a dead heat, since a looser bar catches real and fake moves in the same proportion. 4/16
+wins on defensibility: false-positive rate 21.5% vs 37.7% vs 59.7% at p=8/16; net noise
+±2.9 vs ±4.0 vs ±5.2. At 2/16 roughly 60% of band records flip by chance, and the report
+would read "47 improved, 44 degraded, net +3" with ~27 of the 91 being coin flips.
 
 ---
-Memory: `gate-crossing-metric.md`. Related: `split-rebuild-2026-08-01.md` (the corpus
-split this scores against), `verifier-self-verify-defect.md` (21 records whose
-fail labels are a `simplify(oo−oo)=nan` artifact, not difficulty).
+Memory: `gate-crossing-metric.md`. Related: `split-rebuild-2026-08-01.md`,
+`verifier-self-verify-defect.md`. Run recipe: `docs/v3_full_run_skeleton.md`.
