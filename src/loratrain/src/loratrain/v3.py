@@ -1564,8 +1564,11 @@ def validate_v3_config() -> None:
     problems = []
     if not isinstance(config.V3_K_REGEN, int) or isinstance(config.V3_K_REGEN, bool) or config.V3_K_REGEN < 1:
         problems.append(f"V3_K_REGEN must be a positive int (got {config.V3_K_REGEN!r})")
-    if not (0 < config.V3_ANCHOR_FRACTION < 1):
-        problems.append(f"V3_ANCHOR_FRACTION must be in (0, 1) (got {config.V3_ANCHOR_FRACTION!r})")
+    if not (0 <= config.V3_ANCHOR_FRACTION < 1):
+        # 0.0 is a ruled-valid value (Nicky 2026-08-01: no anchor -- the
+        # v3-full-run composition supersedes the 07-31 blend design); the
+        # anchor draw is skipped entirely at 0.
+        problems.append(f"V3_ANCHOR_FRACTION must be in [0, 1) (got {config.V3_ANCHOR_FRACTION!r})")
     if not (0 < config.V3_HINTED_COLLAPSE_FRACTION < 1):
         problems.append(
             f"V3_HINTED_COLLAPSE_FRACTION must be in (0, 1) (got {config.V3_HINTED_COLLAPSE_FRACTION!r})"
