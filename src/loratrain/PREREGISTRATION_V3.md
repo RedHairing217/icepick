@@ -193,3 +193,39 @@ scar: interim reads were wrong all three times they were taken). Both passes
 differ only in sampling seed. Pod identity recorded per config; anomalous arm
 ⇒ pod identity is the first suspect. Deviations land as dated amendments
 BEFORE the affected read.
+
+---
+
+# AMENDMENT 2 — pod-effect cancellation replaces cross-pod byte-parity (2026-08-01 ~16:5xZ)
+
+Written BEFORE any base-ruler generation completed and BEFORE any arm
+generation. Trigger: the temp-0 cross-pod probe FAILED as a byte-equality
+gate — 2/5 records diverged across cold pods and every pod exhibited a
+warm-server call-order drift (full diagnostics in
+`out/v3_full_run_20260801/opslog_phaseA.md`). The skeleton's premise
+("identical A40s with identical builds must agree exactly") is empirically
+false for greedy near-tie tokens under per-host float noise — consistent with
+the campaign's 2026-07-30 finding that byte-exact greedy equality across
+compute paths is structurally unachievable.
+
+**Change:** the validity mechanism for pooling sharded measurements is now
+**record-to-pod binding**, not cross-pod byte-parity:
+
+1. Every eval record is bound to exactly one pod
+   (`out/v3_full_run_20260801/baseline/record_pod_map.json`). Its base-ruler
+   passes AND all 12 arm measurements run on that pod. Per-pod instrument
+   deltas therefore cancel inside every record-level transition; pooling only
+   aggregates per-record outcomes, never mixes cross-pod numerics within a
+   record.
+2. Phase C is re-sharded from config-per-pod to record-shard-per-pod (each
+   pod serves all 12 adapters over its own shard). Generation count
+   unchanged; ~36 extra server restarts ≈ +$1–2.
+3. The temp-0 probe is retained as an advisory diagnostic (recorded, not
+   gating). The A/A calibration is unchanged and remains same-pod by
+   construction.
+4. Warm-vs-cold server state between a record's two passes is
+   sampling-noise-equivalent; it is part of what the A/A null measures.
+
+No endpoint, test, α, or exclusion rule changes. This amendment is
+variance-reducing by construction (it removes a cross-pod noise term from
+every arm-vs-base comparison that the A/A null could not have modeled).
