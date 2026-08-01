@@ -818,3 +818,117 @@ Nicky pasted `docs/lora_v3_proofhint_execution_skeleton.md`. Scope ruling applie
 
 ### Mission CLOSED — proof-import (session f7b24506, 2026-07-31 ~21:0xZ)
 **107 verified worked solutions published** → out/proof_import_20260731T185338Z/solutions_v3.jsonl (53.5% of the 200 train uids; 105 band + 2 backfill). Census v2 (canonical): 119 matched / 73 no-proof / 7 no-proof-env / 1 not-found / 0 omitted-class; P4: 107 faithful / 10 refused (stubs + 2 misattribution catches) / 2 parse errors; P5: 107/107 verified, 0 rejects, holdout 0-overlap, corpus+split shas re-verified untouched. Spend $3.08 ($3.01 Sonnet + $0.07 pod, terminated 204). Suites: three-suite **1167** (baseline 1118 + 49 proof_mine tests). NEW UNCOMMITTED: src/icepick/allocation/scrape/proof_mine.py + tests/allocation/scrape/test_proof_mine.py (import-only; realmath byte-untouched; includes containment/"nested" matching — recovered 4 rows + fixed 1 silent wrong adjacency match 58134ca4). Full narrative, deviations (6, all disclosed), and the §4 Nicky queue: out/proof_import_20260731T185338Z/REPORT.md. Downstream: ready for docs/lora_v3_proofhint_execution_skeleton.md dataset build; R2 sizing (107 rows) + unmined-81 + refusal-12 dispositions are Nicky's.
+
+---
+
+## WINDOW 13 CONSOLIDATED CLOSE — k=8 sweep, corpus census, split rebuild, scoring spec (session c72b4b02, 2026-07-31 → 08-01)
+
+**A cold window can resume from this block plus `docs/v3_full_run_skeleton.md` alone.**
+Everything below was verified against disk/API at the time of writing; re-verify before acting
+(this environment has delivered fabricated completion events).
+
+### 1. The k=8 sweep — HALTED and TERMINATED, results preserved
+Rented A40 `skvfqhr0l5ilve` to re-measure every adapter at pass@k=8 (the greedy instrument was
+the weak link: the holdout is 100 PURE BAND records, i.e. selected to be ~coin-flips, so
+greedy pass@1 measured one flip per record — **and the 43/100 baseline was itself one flip
+per record**). Completed **17 of 34 configs** before Nicky halted it (the eval set is being
+rebuilt, so remaining configs would measure a soon-to-be-retired anchor).
+
+- Preserved: `out/passk8_sweep/` — 19 rollout files, **17,206 generations**, box-graded, sweep log.
+- **Base ruler at k=8:** of the nominal "100 band" holdout only **70 still measure band** (16 solved,
+  14 collapse/misdirection) — **30% label drift**. Anchors validated the instrument (10/10 solved,
+  fail-anchors 0.10/8).
+- **v1 (n=9): mean Δn_correct −0.184** · band→solved 6.3 vs band→collapse 7.7.
+- **dq (n=7): mean Δn_correct −0.197** · 7.7 vs 6.9. **dq ≈ v1 ⇒ the train/serve quantization
+  mismatch is NOT the limiter** (pre-committed prediction held at 75–80% confidence).
+- v2 never ran (0/12), so the dequant lane's pre-registered dq-vs-v2 paired test is **not
+  computable** and stays that way.
+- Spend ≈ $8.20. Pod terminated; zero GPU pods remain.
+
+### 2. Instrument findings (each cost real money or a corrupted run)
+- **`-fa auto` is the build default.** The entire reference set was measured on auto-resolved-OFF;
+  explicit `-fa off` verified byte-identical (3/3), `-fa on` produces different generations.
+  **Always pass `-fa off` explicitly.**
+- **Grading needs `antlr4-python3-runtime==4.11`.** A pod grader without it silently mis-scored
+  ~70/120 records per config (sympy's LaTeX parser fails closed). Verified recipe: venv +
+  `sympy==1.14.0` + antlr4 + the FULL `src/icepick` tree; **parity-check any re-homed grader to
+  ZERO diffs before trusting a number.** Box grading is now live and parity-verified 10/10.
+- **CUDA-vs-Metal: 0/3 byte-match** (dequant lane) — box eval is invalid against Metal-measured
+  greedy numbers, but cancels within a same-box sweep.
+- **INCIDENT (owned):** a single `ps` snapshot landed in a **3-second gap** between two seeds and
+  was read as "campaign dead"; port 8081 was then seized twice, corrupting seed 20260727
+  (≥32 of 94 records were base-model outputs). Quarantined intact at
+  `out/evalharness/QUARANTINE_20260730_contaminated/`. **A `ps` snapshot is not proof; read
+  sibling progress logs and verify server identity via `/v1/models` before taking a port.**
+
+### 3. Corpus census — COMPLETE, nothing unassessed (921 records)
+Ran corpus-wide proof mining. Fetch telemetry clean throughout (0×429, 0×503, 0 failures).
+
+| tier | proof-bearing | proofless | total |
+|---|---|---|---|
+| band | **187** | 129 | 317 |
+| collapse | **217** | 186 | 405 |
+| misdirection | **87** | 104 | 199 |
+| TOTAL | **491** | **419** | 921 |
+
+- First-pass extraction ≈ **52.9%, flat across tiers** (band 58.6 / collapse 53.6 / misdir 48.7).
+  An earlier "hard records extract worse" claim was an ARTIFACT of mixing in prior lanes' failed
+  residue — **corrected**.
+- **Proof availability is independent of difficulty**: mean n_correct 3.19 (proof-bearing) vs 3.23
+  (proofless), Mann-Whitney **p = 0.918**. So the proof-bearing/proofless split adds no difficulty
+  confound — measured, not assumed.
+- Published so far: **139 rows** across three lanes (`proof_import_20260731T185338Z` 107,
+  `_collapse_20260801T001803Z` 22, `_band2_20260801T012050Z` 10). Import spend **$4.41**.
+- **Verifier defect found:** `verify()` computes `simplify(candidate − truth) == 0`, and
+  `simplify(oo − oo) = nan`, so **every infinity-valued answer is ungradeable by construction** —
+  21 records in scope carry `fail` labels that are bug artifacts, not difficulty. eval_set was
+  0/120 clean and train 0/200 clean, so **no campaign measurement was affected**. Fix is one-line;
+  do it BEFORE the new anchor is measured.
+
+### 4. RULINGS (Nicky, binding)
+- **The old 200/100 split is VOID. Holdout no longer exists.** Rebuilding from scratch.
+- **Split rule:** proof-bearing → training, proofless → eval. `solved` excluded as useless;
+  `drop` discarded as having failed posedness.
+- **Training set OVERBUILT to 468 rows**: all 187 band (40.0%), collapse 194 (41.5%),
+  misdirection 87 — exhausted (18.6%). The 40/60 band:fail ratio holds exactly; the 30/30 split
+  *within* the failure side cannot, so collapse absorbs misdirection's 53-row shortfall.
+  **341 net-new Sonnet calls ≈ $9.85.**
+- **Eval set 322 rows**: ALL 129 proofless band + 97 collapse + 96 misdirection.
+- **Scoring: gate-crossing metric** — see `docs/gate_crossing_scoring_spec.md` (authoritative).
+- **Execution substrate: RunPod. ALL eval on pod, generation AND grading.** Two local carve-outs
+  for cause: API-key custody (pod env vars are readable through the RunPod account API) and data
+  selection from census artifacts.
+- **Pipeline:** baseline (4 pods, ~1.1 h) concurrent with training (1 pod, ~9.3 h critical path);
+  **baseline pods TERMINATE as soon as the ruler lands** (~$14 saved vs idling); then 12 arm evals
+  fan across 4 pods (~17.1 h). **~26.4 h wall, ~82 pod-hours ≈ $36.**
+- **Eval sharding stratified** — every pod carries the same 40/30/30 mix. **Ingest in 10-record
+  intervals** (4/3/3), each a checkpoint: 160 gens ≈ 8 min, so a crash loses an interval not a shard.
+
+### 5. Scoring spec — written, then REVISED after adversarial review
+`docs/gate_crossing_scoring_spec.md` counts **problems whose solvability status changed**, ±1 each,
+net = effect size and a sign test over non-zero problems = p-value. Review found real defects; all
+fixed and verified by computation, not argument:
+- **BLOCKING:** the k=16 gate silently halved `BAND_LO` — **1/16 = 0.0625 is FAIL per
+  records.py:105-110; band starts at 2/16.** The code-faithful gate ALSO zeroes a systematic
+  null-arm drift the wrong gate caused (**−9.8 per 100 records at p=0.05 → +0.0 at every p**).
+  One fix, two findings.
+- **BLOCKING:** base pinned at **k=16** throughout (had been stated both ways).
+- **BLOCKING:** the sign test's null is calibrated **A/A on the base ruler's own two k=8 halves**
+  (free, same instrument) rather than assumed. **Two-sided α = 0.05 DECLARED.**
+- `solved` records now **scored −1 on regression** — excluding them created the one-directional
+  bias the exclusion claimed to prevent. 20%-regression trigger added as an instrument guard.
+- Magnitude threshold **|Δ| ≥ 4/16**, chosen from measured false-positive/power analysis: 2/16,
+  3/16, 4/16 are statistically equivalent (power÷noise 0.137/0.145/0.148), so 4/16 wins on
+  defensibility (FP 21.5% vs 37.7% vs 59.7%). **Bulk of signal is expected from gate crossings,
+  not band fluctuation** — report the two as separate lines.
+
+### 6. RESUME POINT
+**Paste `docs/v3_full_run_skeleton.md` into a fresh window.** It carries the pipeline, sharding,
+intervals, per-pod verification and the scars, and self-references `AGENTS.md` →
+this ledger → `gate_crossing_scoring_spec.md`. **All five release checkboxes (R1–R5) are BLANK —
+arm them or the window will correctly refuse to spend.** Open decisions: R1 ($9.85 Sonnet),
+R2 (eval 322 vs ~200 — cutting saves ~40% GPU), R3 ($36 GPU), R4 (verifier infinity fix first —
+recommended yes), R5 (seed count).
+
+**Git: main is 6 commits ahead of origin, NOT pushed** (`aa9c7f4` → `97903ea`). Nothing is running,
+no pods exist, no spend is in flight. Campaign spend this window ≈ $12.61 ($8.20 GPU + $4.41 Sonnet).
