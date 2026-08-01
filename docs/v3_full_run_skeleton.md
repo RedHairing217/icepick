@@ -34,8 +34,9 @@ historical provenance.
       OVER the $5 line — this is the overbuild ruling (all band + collapse backfill).
 - [ ] **R2 — eval size.** `322` (all 129 proofless band, per ruling) · or `~200` to cut
       GPU cost ~40% · or `___`
-- [ ] **R3 — GPU budget.** Base ruler + 12 arms at eval=322 ≈ **59 h ≈ $26** (A40).
-      Over the $5 line — needs explicit sign-off.
+- [ ] **R3 — GPU budget.** Base ruler + 12 arms at eval=322 ≈ **$32** (A40, ~73 pod-hours).
+      Over the $5 line — needs explicit sign-off. **Up to 4 concurrent pods are approved
+      (Nicky 2026-08-01)**, which cuts wall-clock to ~18 h at identical total cost.
 - [ ] **R4 — verifier infinity fix** before the ruler is measured? (20–21 records whose
       `fail` labels are a `simplify(oo−oo)=nan` artifact.) Recommended yes: fixing after
       the anchor exists splits the instrument.
@@ -80,8 +81,9 @@ Plus `solved` records as scored guards (see spec — they are scored −1 on reg
 excluded). Screen the eval set for the 21 ungradeable records and exclude by name.
 
 ⚠ **Eval size is the dominant cost driver of the whole program.** 322 records × 16
-samples = 5,152 generations per config (~4.6 h on an A40). Base + 12 arms ≈ 59 h ≈ $26.
-Cutting eval to ~200 keeps the tier shape and saves ~40%. This is R2.
+samples = 5,152 generations per config (~4.6 h on an A40). Base + 12 arms ≈ **73 pod-hours
+≈ $32**. Cutting eval to ~200 keeps the tier shape and drops it to ~$20. This is R2.
+Wall-clock is decoupled from cost — see P5b, 4 concurrent pods approved (~18 h).
 
 ## 2b. EXECUTION SUBSTRATE — RunPod (Nicky, standing ruling)
 
@@ -139,6 +141,46 @@ fp16 stands unless re-ruled). **Archive adapters into `src/loratrain/data/` imme
    boundary crossings.
 4. Score per `gate_crossing_scoring_spec.md`. Report gate crossings and magnitude moves
    as **separate lines**.
+
+### P5b — pod fan-out (up to 4 concurrent, approved)
+
+Eval is embarrassingly parallel across configs — each config is an independent
+serve-then-generate cycle. **Cost is per pod-hour, so parallelism buys wall-clock at no
+extra spend.**
+
+| pods | wall-clock | GPU cost |
+|---|---|---|
+| 1 | ~73 h | $32 |
+| 2 | ~37 h | $32 |
+| **4 (approved)** | **~18 h** | **$32** |
+
+At eval = 200 records (R2 alternative): ~11 h on 4 pods, **$20**.
+
+**Sharding rule — the base ruler is NOT shardable across pods in the naive way.** It is
+the common reference for every arm, so it must be one coherent measurement. Options, in
+order of preference:
+
+1. **Run the full base ruler on pod 1 first (~4.6 h), then fan the 12 arms across all 4.**
+   Simplest, and the ruler is ready before any arm needs it.
+2. If the ruler is sharded by *record* across pods, every shard must use an identical
+   serving configuration and the shards must be disjoint and complete — verify by
+   reassembling and asserting 322 records × 16 samples with no duplicates before use.
+   Do NOT shard the two k=8 passes of one record across different pods; the A/A
+   calibration depends on the two halves being independent *samples*, not independent
+   *machines*.
+
+**Per-pod requirements — every pod, no exceptions:**
+- Identical engine build (b10107 / `c0bc859`), identical flags, `-fa off` explicit.
+- Base GGUF sha-verified against `a7676d25…8f35f` on each pod independently.
+- The grader parity check (§2b) run **per pod** — a pod that skipped `antlr4` produces
+  silently wrong numbers that look plausible.
+- Record which pod produced which config in the manifest. Cross-pod numeric differences
+  are exactly the class of bug that has bitten this project three times; if any arm
+  looks anomalous, the pod identity is the first thing to check.
+
+**Do not mix pod-produced and locally-produced numbers** — all eval is pod-side (§2b),
+so this should not arise, but the CUDA-vs-Metal finding (0/3 byte-match) is why it
+matters.
 
 ### P6 — verdict
 Pre-register before any read: primary comparison, two-sided α=0.05, multiplicity policy.
