@@ -166,6 +166,12 @@ def env(tmp_path):
     _write_json(split_path, {
         "ruling": "fixture -- mirrors the real split's proof-bearing/proofless schema, no holdout",
         "train_side_uids": list(TRAIN_UIDS),
+        # v3b anchor_solved (2abe292): eval-side membership, shaped like the
+        # real split (eval_set_uids keyed by tier, papers.eval_papers a flat
+        # list) -- aligned with the ONE eval_set.jsonl fixture row below
+        # (uid "eval-u0", arxiv_id "9999.00001") so the two fixtures agree.
+        "eval_set_uids": {"band": ["eval-u0"], "collapse": [], "misdirection": []},
+        "papers": {"eval_papers": ["9999.00001"]},
     })
     split_sha256 = _sha256(split_path)
 
@@ -1026,3 +1032,573 @@ def test_recorded_prefix_shorter_than_16_hex_refuses(env):
     })
     with pytest.raises(v3.SolutionsIntegrityError, match="too short to pin|Sha-chain broken"):
         _make_bundle(env)
+
+
+# ============================================================================
+# 13. v3b anchor_solved (docs/SESSION_HANDOFF.md ledger authorization @
+#     2abe292; PREREGISTRATION_V3.md Amendment 6 @ 0139327)
+#
+# NAME-COLLISION REMINDER: "anchor_solved" here is a COMPLETELY DIFFERENT
+# mechanism from the legacy "anchor" rows exercised in section 7 above
+# (draw_anchor_rows / V3_ANCHOR_FRACTION / V3_ANCHOR_SEED_STRING, drawn
+# from v2/cap1, currently retired to a 0.0 fraction). This section never
+# touches that mechanism; test_no_anchor_live_config (section 7) already
+# pins its 0.0 fraction as untouched.
+# ============================================================================
+
+ANCHOR_UIDS = ["a0", "a1"]
+
+# (question, solution_text, answer, arxiv_id) -- arxiv_ids deliberately
+# disjoint from the eval fixture's paper ("9999.00001", env's split.
+# papers.eval_papers) so the happy path is genuinely NOT-in-eval.
+ANCHOR_SOLUTION_SPECS = {
+    "a0": ("Anchor statement zero.", "Anchor derivation zero ends in \\boxed{0}.", "0", "2000.00000"),
+    "a1": ("Anchor statement one.", "Anchor derivation one ends in \\boxed{1}.", "1", "2000.00001"),
+}
+
+
+def _anchor_solutions_row(uid, *, question=None, solution_text=None, answer=None, arxiv_id=None):
+    if question is None:
+        question, solution_text, answer, arxiv_id = ANCHOR_SOLUTION_SPECS[uid]
+    return {
+        "uid": uid,
+        "question": question,
+        "proof_raw_sha": hashlib.sha256(f"anchor-proof-{uid}".encode("utf-8")).hexdigest(),
+        "solution_text": solution_text,
+        "answer": answer,
+        "provenance": {
+            "arxiv_id": arxiv_id,
+            "match_method": "adjacency",
+            "match_confidence": "high",
+            "sonnet_cache_key": f"{uid}__anchor_cache",
+            "verified": True,
+        },
+    }
+
+
+def _default_anchor_rollouts():
+    """a0: try0 CORRECT (kept, k_tried=1). a1: try0 WRONG, try1 CORRECT
+    (kept, k_tried=2)."""
+    return [
+        _rollout_row("a0", 0, "CORRECT output for a0 try0."),
+        _rollout_row("a1", 0, "WRONG output for a1 try0."),
+        _rollout_row("a1", 1, "CORRECT output for a1 try1 (kept)."),
+    ]
+
+
+@pytest.fixture
+def anchor_env(env):
+    """Extends ``env`` with a 2-uid anchor_solutions.jsonl + manifest
+    (uids "a0"/"a1", disjoint from TRAIN_UIDS and from the eval fixture's
+    uid/paper -- see env's split.eval_set_uids / papers.eval_papers) and
+    empty anchor-rollouts/bundle-dir paths for individual tests to
+    populate.
+    """
+    tmp_path = env["tmp_path"]
+    anchor_solutions_path = tmp_path / "proof_import" / "anchor_solutions.jsonl"
+    _write_jsonl(anchor_solutions_path, [_anchor_solutions_row(uid) for uid in ANCHOR_UIDS])
+    anchor_solutions_sha256 = _sha256(anchor_solutions_path)
+    anchor_manifest_path = anchor_solutions_path.parent / "anchor_manifest.json"
+    _write_json(anchor_manifest_path, {
+        "anchor_solutions": {"sha256": anchor_solutions_sha256},
+        "split": {"sha256": env["expected_split_sha256"]},
+    })
+    env["anchor_solutions_path"] = anchor_solutions_path
+    env["anchor_manifest_path"] = anchor_manifest_path
+    env["anchor_solutions_sha256"] = anchor_solutions_sha256
+    env["anchor_bundle_dir"] = tmp_path / "anchor_bundle"
+    env["anchor_rollouts_path"] = tmp_path / "anchor_rollouts.jsonl"
+    return env
+
+
+def _resync_anchor_manifest(env) -> None:
+    _write_json(env["anchor_manifest_path"], {
+        "anchor_solutions": {"sha256": env["anchor_solutions_sha256"]},
+        "split": {"sha256": env["expected_split_sha256"]},
+    })
+
+
+def _make_anchor_bundle_kwargs(env, **overrides) -> dict:
+    kwargs = dict(
+        anchor_solutions_path=env["anchor_solutions_path"],
+        anchor_manifest_path=env["anchor_manifest_path"],
+        split_path=env["split_path"],
+        expected_split_sha256=env["expected_split_sha256"],
+        eval_set_path=env["eval_set_path"],
+        bundle_dir=env["anchor_bundle_dir"],
+        k_regen=config.V3_K_REGEN,
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+def _make_anchor_bundle(env, **overrides) -> dict:
+    return v3.make_anchor_bundle(**_make_anchor_bundle_kwargs(env, **overrides))
+
+
+def _build_hinted_reference_dataset(env) -> Path:
+    """Build the ordinary, non-anchor hinted dataset for ``env`` (t0/t1/t2
+    kept, t3 hint_insufficient -- the default rollouts fixture) to serve
+    as the "stage-1 reference" fixture for
+    ``assert_hinted_subset_byte_unchanged`` tests: this run's OWN hinted
+    rows must trivially be byte-identical to it, since both are built from
+    the exact same solutions/bundle/rollouts inputs.
+    """
+    _write_rollouts(env, _default_rollouts())
+    _make_bundle(env)
+    manifest = v3.build_dataset_cmd(**_build_dataset_kwargs(env, output_dir=env["tmp_path"] / "stage1_reference"))
+    return Path(manifest["dataset"]["path"])
+
+
+@pytest.fixture
+def anchor_build_env(anchor_env):
+    """``anchor_env`` plus a byte-exact stage-1 hinted reference dataset
+    (built via the ordinary non-anchor path from this SAME env) and
+    default anchor rollouts written -- ready for
+    ``v3.build_dataset_cmd(**_build_dataset_anchor_kwargs(anchor_build_env))``.
+    """
+    reference_path = _build_hinted_reference_dataset(anchor_env)
+    anchor_env["hinted_reference_dataset_path"] = reference_path
+    anchor_env["output_dir"] = anchor_env["tmp_path"] / "dataset_v3b"
+    _write_jsonl(anchor_env["anchor_rollouts_path"], _default_anchor_rollouts())
+    return anchor_env
+
+
+def _build_dataset_anchor_kwargs(env, **overrides) -> dict:
+    kwargs = _build_dataset_kwargs(env)
+    kwargs.update(
+        anchor_solutions_path=env["anchor_solutions_path"],
+        anchor_manifest_path=env["anchor_manifest_path"],
+        anchor_rollouts_path=env["anchor_rollouts_path"],
+        hinted_reference_dataset_path=env["hinted_reference_dataset_path"],
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+# ---- 13a. make-anchor-bundle -----------------------------------------------
+
+
+def test_make_anchor_bundle_happy_path_no_answer_key(anchor_env):
+    manifest = _make_anchor_bundle(anchor_env)
+    rows = _read_jsonl(manifest["bundle"]["path"])
+    assert len(rows) == len(ANCHOR_UIDS)
+    for row in rows:
+        assert set(row.keys()) == {"uid", "regen_prompt"}
+        assert "answer" not in row
+        assert "solution_text" not in row
+        assert config.V3_HINT_MARKER in row["regen_prompt"]
+    assert {r["uid"] for r in rows} == set(ANCHOR_UIDS)
+    assert manifest["stage"] == v3.STAGE_ANCHOR_BUNDLE
+    assert manifest["lane"] == "anchor_solved"
+
+
+def test_make_anchor_bundle_does_not_require_train_split_membership(anchor_env):
+    # a0/a1 are NOT in TRAIN_UIDS (disjoint by fixture construction) --
+    # make_anchor_bundle must NOT hit assert_train_split_only's
+    # UnknownUidError, proving the guard substitution actually took effect
+    # (docs/SESSION_HANDOFF.md ledger authorization @ 2abe292).
+    assert not (set(ANCHOR_UIDS) & set(TRAIN_UIDS))
+    _make_anchor_bundle(anchor_env)  # must NOT raise
+    assert (anchor_env["anchor_bundle_dir"] / v3.ANCHOR_BUNDLE_FILENAME).exists()
+
+
+def test_make_anchor_bundle_uid_in_eval_set_uids_refuses(anchor_env):
+    split_data = json.loads(anchor_env["split_path"].read_text(encoding="utf-8"))
+    split_data["eval_set_uids"]["band"].append("a0")
+    _write_json(anchor_env["split_path"], split_data)
+    anchor_env["expected_split_sha256"] = _sha256(anchor_env["split_path"])
+    _resync_anchor_manifest(anchor_env)
+    with pytest.raises(v3.EvalMembershipError, match="uid membership"):
+        _make_anchor_bundle(anchor_env)
+
+
+def test_make_anchor_bundle_paper_in_eval_papers_refuses(anchor_env):
+    split_data = json.loads(anchor_env["split_path"].read_text(encoding="utf-8"))
+    split_data["papers"]["eval_papers"].append(ANCHOR_SOLUTION_SPECS["a0"][3])
+    _write_json(anchor_env["split_path"], split_data)
+    anchor_env["expected_split_sha256"] = _sha256(anchor_env["split_path"])
+    _resync_anchor_manifest(anchor_env)
+    with pytest.raises(v3.EvalMembershipError, match="paper membership"):
+        _make_anchor_bundle(anchor_env)
+
+
+def test_make_anchor_bundle_statement_leakage_exact_hard_fail(anchor_env):
+    rows = _read_jsonl(anchor_env["anchor_solutions_path"])
+    rows[0]["question"] = "Eval problem Alpha."  # exact collision w/ the eval_set fixture statement
+    _write_jsonl(anchor_env["anchor_solutions_path"], rows)
+    anchor_env["anchor_solutions_sha256"] = _sha256(anchor_env["anchor_solutions_path"])
+    _resync_anchor_manifest(anchor_env)
+    with pytest.raises(build_dataset.LeakageError, match="eval_set"):
+        _make_anchor_bundle(anchor_env)
+
+
+def test_make_anchor_bundle_manifest_sha_chain_mismatch_refusal(anchor_env):
+    _write_json(anchor_env["anchor_manifest_path"], {
+        "anchor_solutions": {"sha256": "0" * 64},
+        "split": {"sha256": anchor_env["expected_split_sha256"]},
+    })
+    with pytest.raises(v3.SolutionsIntegrityError, match="sha256"):
+        _make_anchor_bundle(anchor_env)
+
+
+def test_make_anchor_bundle_restart_idempotent_resume(anchor_env):
+    m1 = _make_anchor_bundle(anchor_env)
+    assert m1.get("resumed_from_existing_publish") is False
+    m2 = _make_anchor_bundle(anchor_env)
+    assert m2.get("resumed_from_existing_publish") is True
+    assert m2["bundle"]["sha256"] == m1["bundle"]["sha256"]
+    assert m2["input_signature"] == m1["input_signature"]
+
+
+def test_make_anchor_bundle_restart_force_new_dir_creates_sibling(anchor_env):
+    m1 = _make_anchor_bundle(anchor_env)
+    m2 = _make_anchor_bundle(anchor_env, k_regen=config.V3_K_REGEN + 1, force_new_dir=True)
+    assert Path(m2["bundle"]["path"]).parent != anchor_env["anchor_bundle_dir"]
+    assert Path(m2["bundle"]["path"]).parent.name == anchor_env["anchor_bundle_dir"].name + "__2"
+    original_manifest = json.loads(
+        (anchor_env["anchor_bundle_dir"] / v3.ANCHOR_BUNDLE_MANIFEST_FILENAME).read_text()
+    )
+    assert original_manifest["input_signature"] == m1["input_signature"]
+
+
+def test_anchor_bundle_filenames_distinct_from_hinted_bundle_filenames():
+    # Coexistence guarantee (module docstring) -- also incidentally proves
+    # the two lanes are never confused with each other.
+    assert v3.ANCHOR_BUNDLE_FILENAME != v3.BUNDLE_FILENAME
+    assert v3.ANCHOR_BUNDLE_MANIFEST_FILENAME != v3.BUNDLE_MANIFEST_FILENAME
+    assert v3.STAGE_ANCHOR_BUNDLE != v3.STAGE_REGEN_BUNDLE
+
+
+# ---- 13b. load_split_eval_membership / assert_anchor_not_in_eval ----------
+
+
+def test_load_split_eval_membership_flattens_tiered_dict(anchor_env):
+    eval_uids, eval_papers = v3.load_split_eval_membership(
+        anchor_env["split_path"], anchor_env["expected_split_sha256"]
+    )
+    assert eval_uids == {"eval-u0"}
+    assert eval_papers == {"9999.00001"}
+
+
+def test_assert_anchor_not_in_eval_clean_does_not_raise():
+    rows = [{"uid": "a0", "provenance": {"arxiv_id": "2000.00000"}}]
+    v3.assert_anchor_not_in_eval(rows, {"eval-u0"}, {"9999.00001"})  # must not raise
+
+
+def test_assert_anchor_not_in_eval_uid_offender():
+    rows = [{"uid": "eval-u0", "provenance": {"arxiv_id": "2000.00000"}}]
+    with pytest.raises(v3.EvalMembershipError, match="uid membership"):
+        v3.assert_anchor_not_in_eval(rows, {"eval-u0"}, {"9999.00001"})
+
+
+def test_assert_anchor_not_in_eval_paper_offender():
+    rows = [{"uid": "a0", "provenance": {"arxiv_id": "9999.00001"}}]
+    with pytest.raises(v3.EvalMembershipError, match="paper membership"):
+        v3.assert_anchor_not_in_eval(rows, {"eval-u0"}, {"9999.00001"})
+
+
+@pytest.mark.parametrize("bad", [None, "", "   ", {}])
+def test_assert_anchor_not_in_eval_paperless_refuses(bad):
+    # Orchestrator hardening (2026-08-02 integration review): without an
+    # arxiv_id the paper-level half of the substituted membership rule cannot
+    # run -- `None in eval_papers` is vacuously False. That must refuse, not
+    # pass. upload_guard fail-closes the same way at the final gate; refusing
+    # here means it lands before regen/training spend.
+    prov = {} if bad == {} else {"arxiv_id": bad}
+    rows = [{"uid": "a0", "provenance": prov}]
+    with pytest.raises(v3.EvalMembershipError, match="no provenance.arxiv_id"):
+        v3.assert_anchor_not_in_eval(rows, {"eval-u0"}, {"9999.00001"})
+
+
+def test_assert_anchor_not_in_eval_paperless_named_before_other_offenders():
+    # A paperless row and a genuine uid offender together: the paperless
+    # refusal fires first and names the paperless row, so the operator fixes
+    # the un-checkable input rather than chasing a partial verdict.
+    rows = [
+        {"uid": "a0", "provenance": {}},
+        {"uid": "eval-u0", "provenance": {"arxiv_id": "2000.00000"}},
+    ]
+    with pytest.raises(v3.EvalMembershipError, match="a0"):
+        v3.assert_anchor_not_in_eval(rows, {"eval-u0"}, {"9999.00001"})
+
+
+# ---- 13c. hint_copy_fraction (n-gram census) -------------------------------
+
+
+def test_hint_copy_fraction_partial_overlap():
+    hint = "one two three four five six seven"
+    completion = "prefix one two three four five six extra"
+    # hint has 2 word-6-grams: (one..six), (two..seven); completion's
+    # 6-grams contain (one..six) but not (two..seven) -> 1/2.
+    assert v3.hint_copy_fraction(hint, completion) == 0.5
+
+
+def test_hint_copy_fraction_no_overlap():
+    hint = "alpha beta gamma delta epsilon zeta"
+    completion = "nothing in common here at all whatsoever"
+    assert v3.hint_copy_fraction(hint, completion) == 0.0
+
+
+def test_hint_copy_fraction_short_hint_is_vacuous_zero():
+    assert v3.hint_copy_fraction("too short", "anything at all") == 0.0
+
+
+# ---- 13d. build-dataset --anchor-solutions / --anchor-rollouts ------------
+
+
+def test_build_dataset_anchor_both_required_together_solutions_only(env):
+    _write_rollouts(env, _default_rollouts())
+    _make_bundle(env)
+    with pytest.raises(v3.AnchorInputError, match="together"):
+        v3.build_dataset_cmd(**_build_dataset_kwargs(
+            env, anchor_solutions_path=Path("/tmp/anchor_solutions.jsonl"),
+        ))
+
+
+def test_build_dataset_anchor_both_required_together_rollouts_only(env):
+    _write_rollouts(env, _default_rollouts())
+    _make_bundle(env)
+    with pytest.raises(v3.AnchorInputError, match="together"):
+        v3.build_dataset_cmd(**_build_dataset_kwargs(
+            env, anchor_rollouts_path=Path("/tmp/anchor_rollouts.jsonl"),
+        ))
+
+
+def test_build_dataset_anchor_requires_hinted_reference_dataset(anchor_build_env):
+    kwargs = _build_dataset_anchor_kwargs(anchor_build_env, hinted_reference_dataset_path=None)
+    with pytest.raises(v3.AnchorInputError, match="hinted-reference-dataset"):
+        v3.build_dataset_cmd(**kwargs)
+
+
+def test_build_dataset_anchor_happy_path_appends_rows_and_censuses(anchor_build_env):
+    manifest = v3.build_dataset_cmd(**_build_dataset_anchor_kwargs(anchor_build_env))
+    rows = _read_jsonl(manifest["dataset"]["path"])
+    assert len(rows) == 5  # 3 hinted (t0, t1, t2) + 2 anchor_solved (a0, a1)
+    anchor_rows = [r for r in rows if r["provenance"]["source_tier"] == "anchor_solved"]
+    assert {r["provenance"]["uid"] for r in anchor_rows} == set(ANCHOR_UIDS)
+
+    census = manifest["anchor_solved"]
+    assert census["lane"] == "anchor_solved"
+    assert census["count"] == 2
+    assert census["fraction_of_final_dataset"] == 2 / 5
+    assert census["try_histogram"] == {"1": 1, "2": 1}
+    assert census["attrition"]["missing_from_rollouts"] == {"count": 0, "uids": []}
+    assert census["attrition"]["hint_insufficient"] == {"count": 0, "uids": []}
+    assert set(census["hint_copy_census"]["per_uid"]) == set(ANCHOR_UIDS)
+    assert census["hinted_byte_identity_check"]["result"] == "byte_identical"
+    assert any("anchor" in g for g in manifest["guards"])
+
+
+def test_build_dataset_anchor_excluded_from_blend_arithmetic(anchor_build_env):
+    manifest = v3.build_dataset_cmd(**_build_dataset_anchor_kwargs(anchor_build_env))
+    # The R3 blend's own arithmetic (hinted/legacy-anchor 60/40 + 75/25)
+    # must be UNAFFECTED by anchor_solved -- it never counts toward either
+    # hinted_count or anchor_count, and the blend block's own "final_rows"
+    # reports the R3-blend subtotal only (3), not the true published total
+    # (5, which lives at manifest["dataset"]["rows"] instead).
+    assert manifest["blend"]["hinted_count"] == 3
+    assert manifest["blend"]["anchor_count"] == 0  # legacy anchor, V3_ANCHOR_FRACTION == 0.0, untouched
+    assert manifest["blend"]["final_rows"] == 3
+    assert manifest["dataset"]["rows"] == 5
+
+
+def test_build_dataset_anchor_never_in_excluded_offtier(anchor_build_env):
+    manifest = v3.build_dataset_cmd(**_build_dataset_anchor_kwargs(anchor_build_env))
+    assert manifest["censuses"]["excluded_offtier"]["count"] == 0
+    assert not (set(ANCHOR_UIDS) & set(manifest["censuses"]["excluded_offtier"]["uids"]))
+
+
+def test_build_dataset_anchor_uid_collision_with_hinted_raises_blend_error(anchor_build_env):
+    # Re-use "t0" (a hinted uid) as an anchor_solutions uid -- cap1 must
+    # refuse (asserted, never silently deduped -- module docstring "cap1").
+    rows = _read_jsonl(anchor_build_env["anchor_solutions_path"])
+    rows.append(_anchor_solutions_row(
+        "t0", question="Colliding anchor Q.", solution_text="Colliding sol \\boxed{9}.",
+        answer="9", arxiv_id="2000.00099",
+    ))
+    _write_jsonl(anchor_build_env["anchor_solutions_path"], rows)
+    anchor_build_env["anchor_solutions_sha256"] = _sha256(anchor_build_env["anchor_solutions_path"])
+    _resync_anchor_manifest(anchor_build_env)
+    anchor_rollouts = _read_jsonl(anchor_build_env["anchor_rollouts_path"])
+    anchor_rollouts.append(_rollout_row("t0", 0, "CORRECT output for colliding t0."))
+    _write_jsonl(anchor_build_env["anchor_rollouts_path"], anchor_rollouts)
+
+    with pytest.raises(v3.BlendError, match="cap1"):
+        v3.build_dataset_cmd(**_build_dataset_anchor_kwargs(anchor_build_env))
+
+
+def test_build_dataset_anchor_missing_from_rollouts_and_hint_insufficient_censused(anchor_build_env):
+    # a0 never shows up in the anchor rollouts at all; a1 gets only WRONG
+    # tries -- both distinct attrition classes, named, never silently
+    # dropped (mirrors the hinted lane's census shape).
+    _write_jsonl(anchor_build_env["anchor_rollouts_path"], [
+        _rollout_row("a1", 0, "WRONG output for a1 try0."),
+    ])
+    manifest = v3.build_dataset_cmd(**_build_dataset_anchor_kwargs(anchor_build_env))
+    census = manifest["anchor_solved"]
+    assert census["count"] == 0
+    assert census["attrition"]["missing_from_rollouts"] == {"count": 1, "uids": ["a0"]}
+    assert census["attrition"]["hint_insufficient"] == {"count": 1, "uids": ["a1"]}
+    rows = _read_jsonl(manifest["dataset"]["path"])
+    assert len(rows) == 3  # hinted only -- neither anchor uid made it in
+
+
+def test_build_dataset_default_no_anchor_flags_manifest_has_no_anchor_solved_key(env):
+    _write_rollouts(env, _default_rollouts())
+    _make_bundle(env)
+    manifest = v3.build_dataset_cmd(**_build_dataset_kwargs(env))
+    assert "anchor_solved" not in manifest
+    assert manifest["guards"] == list(v3.BUILD_DATASET_GUARD_STEPS)
+
+
+def test_build_dataset_default_dataset_bytes_unaffected_by_new_anchor_kwargs_existing(env):
+    # ADDITIVE-ONLY contract: build once via the plain kwargs (no anchor
+    # kwargs even mentioned), once via kwargs that explicitly pass the new
+    # anchor params as their own defaults (None) -- both must publish
+    # byte-identical dataset content.
+    _write_rollouts(env, _default_rollouts())
+    _make_bundle(env)
+    m1 = v3.build_dataset_cmd(**_build_dataset_kwargs(env, output_dir=env["tmp_path"] / "d1"))
+    m2 = v3.build_dataset_cmd(**_build_dataset_kwargs(
+        env, output_dir=env["tmp_path"] / "d2",
+        anchor_solutions_path=None, anchor_manifest_path=None,
+        anchor_rollouts_path=None, hinted_reference_dataset_path=None,
+    ))
+    assert m1["dataset"]["sha256"] == m2["dataset"]["sha256"]
+    assert Path(m1["dataset"]["path"]).read_bytes() == Path(m2["dataset"]["path"]).read_bytes()
+
+
+# ---- 13e. assert_hinted_subset_byte_unchanged ------------------------------
+
+
+def test_hinted_subset_byte_unchanged_matching_reference_does_not_raise(env):
+    reference_path = _build_hinted_reference_dataset(env)
+    hinted_rows = _read_jsonl(reference_path)
+    v3.assert_hinted_subset_byte_unchanged(hinted_rows, reference_path)  # must not raise
+
+
+def test_hinted_subset_byte_unchanged_content_mismatch_refuses(env):
+    reference_path = _build_hinted_reference_dataset(env)
+    hinted_rows = _read_jsonl(reference_path)
+    hinted_rows[0]["completion"][0]["content"] = "a DIFFERENT completion, drifted from stage-1"
+    with pytest.raises(v3.HintedReferenceMismatchError, match="differ in content"):
+        v3.assert_hinted_subset_byte_unchanged(hinted_rows, reference_path)
+
+
+def test_hinted_subset_byte_unchanged_uid_set_differs_refuses(env):
+    reference_path = _build_hinted_reference_dataset(env)
+    hinted_rows = _read_jsonl(reference_path)
+    hinted_rows.pop()  # drop one uid entirely -- the sets no longer match
+    with pytest.raises(v3.HintedReferenceMismatchError, match="uid set differs"):
+        v3.assert_hinted_subset_byte_unchanged(hinted_rows, reference_path)
+
+
+def test_hinted_subset_byte_unchanged_missing_reference_file_refuses(env, tmp_path):
+    with pytest.raises(v3.HintedReferenceMismatchError, match="not found"):
+        v3.assert_hinted_subset_byte_unchanged([], tmp_path / "does_not_exist.jsonl")
+
+
+def test_build_dataset_anchor_stage1_drift_refuses_before_anchor_harvest(anchor_build_env):
+    # Mutate the PUBLISHED reference file (simulating stage-1 drift) --
+    # build-dataset must refuse via assert_hinted_subset_byte_unchanged
+    # before spending any effort on the anchor harvest.
+    ref_rows = _read_jsonl(anchor_build_env["hinted_reference_dataset_path"])
+    ref_rows[0]["completion"][0]["content"] = "drifted stage-1 content"
+    _write_jsonl(anchor_build_env["hinted_reference_dataset_path"], ref_rows)
+    with pytest.raises(v3.HintedReferenceMismatchError, match="differ in content"):
+        v3.build_dataset_cmd(**_build_dataset_anchor_kwargs(anchor_build_env))
+
+
+# ---- 13f. eval-set freshness warning (config.EVAL_SET_PATH staleness) -----
+
+
+def test_eval_set_freshness_warning_fires_on_row_count_mismatch(anchor_env, capsys):
+    # anchor_env's eval_set.jsonl fixture has 1 row -- config.
+    # V3_ANCHOR_EVAL_SET_EXPECTED_ROWS is 286, so this must warn (never
+    # hard-fail: the happy-path bundle build must still succeed).
+    assert config.V3_ANCHOR_EVAL_SET_EXPECTED_ROWS != 1
+    _make_anchor_bundle(anchor_env)
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert "286" in captured.err
+
+
+def test_eval_set_freshness_warning_silent_when_row_count_matches(anchor_env, capsys, monkeypatch):
+    monkeypatch.setattr(config, "V3_ANCHOR_EVAL_SET_EXPECTED_ROWS", 1)  # matches the fixture's 1-row eval set
+    _make_anchor_bundle(anchor_env)
+    captured = capsys.readouterr()
+    assert "WARNING" not in captured.err
+
+
+# ---- 13g. sha-chain generalization is byte-identical for the default label -
+
+
+def test_generalized_sha_chain_default_label_message_unchanged(env):
+    # assert_solutions_sha_chain's generalization (manifest_sha_paths /
+    # sidecar_names / label kwargs, all defaulting to the pre-v3b globals)
+    # must reproduce the EXACT pre-v3b not-found message for the default
+    # (solutions_v3) label -- this pins that byte-identity.
+    missing_path = env["tmp_path"] / "does_not_exist_solutions_v3.jsonl"
+    with pytest.raises(v3.SolutionsIntegrityError, match=r"solutions_v3\.jsonl yet"):
+        v3.assert_solutions_sha_chain(missing_path, env["manifest_path"], {})
+
+
+def test_generalized_sha_chain_anchor_label_distinct_message(env):
+    missing_path = env["tmp_path"] / "does_not_exist_anchor_solutions.jsonl"
+    with pytest.raises(v3.SolutionsIntegrityError, match="anchor solutions"):
+        v3.assert_solutions_sha_chain(
+            missing_path, env["manifest_path"], {},
+            manifest_sha_paths=v3.ANCHOR_MANIFEST_SHA_PATHS,
+            sidecar_names=v3.ANCHOR_SHA_SIDECAR_NAMES,
+            label="anchor solutions",
+        )
+
+
+# ---- 13h. CLI wiring --------------------------------------------------------
+
+
+def test_cli_parser_builds_make_anchor_bundle_subcommand():
+    parser = v3.build_arg_parser()
+    args = parser.parse_args([
+        "make-anchor-bundle", "--anchor-solutions", "/tmp/a.jsonl", "--bundle-dir", "/tmp/ab",
+    ])
+    assert args.subcommand == "make-anchor-bundle"
+    assert args.anchor_manifest is None
+    assert args.split == config.V3_SPLIT_PATH
+    assert args.eval_set == config.EVAL_SET_PATH
+
+
+def test_cli_build_dataset_anchor_flags_optional_default_none():
+    parser = v3.build_arg_parser()
+    args = parser.parse_args([
+        "build-dataset", "--bundle-dir", "/tmp/b", "--solutions", "/tmp/s.jsonl",
+        "--rollouts", "/tmp/r.jsonl", "--output-dir", "/tmp/o",
+    ])
+    assert args.anchor_solutions is None
+    assert args.anchor_rollouts is None
+    assert args.hinted_reference_dataset == config.V3_STAGE1_HINTED_DATASET_PATH
+
+
+def test_cli_build_dataset_accepts_anchor_flags():
+    parser = v3.build_arg_parser()
+    args = parser.parse_args([
+        "build-dataset", "--bundle-dir", "/tmp/b", "--solutions", "/tmp/s.jsonl",
+        "--rollouts", "/tmp/r.jsonl", "--output-dir", "/tmp/o",
+        "--anchor-solutions", "/tmp/anchor_solutions.jsonl",
+        "--anchor-rollouts", "/tmp/anchor_rollouts.jsonl",
+    ])
+    assert str(args.anchor_solutions) == "/tmp/anchor_solutions.jsonl"
+    assert str(args.anchor_rollouts) == "/tmp/anchor_rollouts.jsonl"
+
+
+# ---- 13i. legacy "anchor" mechanism left untouched -------------------------
+
+
+def test_legacy_anchor_mechanism_names_remain_distinct_from_anchor_solved():
+    # Cheap regression pin against the two mechanisms ever being conflated:
+    # different config constants, different provenance source_tier values.
+    assert config.V3_ANCHOR_FRACTION == 0.0  # Nicky's NO-ANCHOR ruling, untouched by this work
+    assert "anchor_solved" != "anchor"
+    assert hasattr(config, "V3_ANCHOR_SEED_STRING")  # legacy mechanism's own config, untouched
+    assert hasattr(config, "V3_ANCHOR_EVAL_SET_EXPECTED_ROWS")  # this work's own, unrelated config

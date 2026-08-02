@@ -381,12 +381,22 @@ def _validate_v3_dataset(rows, dataset_path) -> dict:
         # point of the exemption is that these two checks replace the train-side
         # one, so a split that cannot support them must stop the upload.
         raw_eval_uids = split_obj.get("eval_set_uids")
-        if not raw_eval_uids:
+        # eval_set_uids is a DICT KEYED BY TIER in the real split file
+        # (band/collapse/misdirection -> 104/97/85 = 286); a flat list is
+        # tolerated for fixtures. Flattening is load-bearing: set() over the
+        # dict yields the three TIER NAMES, which silently turns this check
+        # into a no-op that can never match a uid. (That was the shape of this
+        # code as first committed in 243e41b -- caught in review against the
+        # real split before any anchor upload ran.)
+        if isinstance(raw_eval_uids, dict):
+            eval_uids = {u for tier_uids in raw_eval_uids.values() for u in tier_uids}
+        else:
+            eval_uids = set(raw_eval_uids or ())
+        if not eval_uids:
             raise UploadRefused(
                 f"{split_path}: eval_set_uids is missing or empty -- cannot run the "
                 f"{anchor_tier} uid-level eval-disjointness check; refusing rather than skipping it."
             )
-        eval_uids = set(raw_eval_uids)
         eval_papers = set((split_obj.get("papers") or {}).get("eval_papers") or [])
         if not eval_papers:
             raise UploadRefused(

@@ -998,7 +998,12 @@ def _v3_env_anchor(tmp_path, monkeypatch, rows, *, eval_uids=("some-eval-uid",),
         ] + ["spare"]
     split = {"train_side_uids": list(train_side)}
     if not omit_eval_uids:
-        split["eval_set_uids"] = list(eval_uids)
+        # preserve dict-of-tiers shape when given one (that is the real split's
+        # shape); only coerce sequences to list
+        split["eval_set_uids"] = (
+            {k: list(v) for k, v in eval_uids.items()}
+            if isinstance(eval_uids, dict) else list(eval_uids)
+        )
     if not omit_papers:
         split["papers"] = {"eval_papers": list(eval_papers)}
     sp = tmp_path / "split.json"
@@ -1069,6 +1074,42 @@ def test_v3_anchor_exemption_does_not_leak_to_band_rows(tmp_path, monkeypatch):
 
 def test_v3_anchor_missing_eval_set_uids_refuses(tmp_path, monkeypatch):
     _v3_env_anchor(tmp_path, monkeypatch, [_anchor_row("anch1")], omit_eval_uids=True)
+    with pytest.raises(upload_guard.UploadRefused, match="eval_set_uids"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_anchor_eval_set_uids_dict_of_tiers_is_flattened(tmp_path, monkeypatch):
+    # REGRESSION (found reviewing 243e41b against the real split): the real
+    # split file stores eval_set_uids as a DICT KEYED BY TIER, not a flat list.
+    # set() over that dict yields the tier NAMES, silently making the uid check
+    # a no-op. This pins the flattening: an anchor uid hiding inside a tier
+    # bucket must still be caught.
+    from loratrain import build_dataset as _bd
+    rows = [_anchor_row("anch1")]
+    _v3_env_anchor(
+        tmp_path, monkeypatch, rows,
+        eval_uids={"band": ["other-a"], "collapse": ["anch1"], "misdirection": []},
+    )
+    with pytest.raises(_bd.LeakageError, match="eval set"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_anchor_dict_eval_uids_still_passes_a_clean_anchor(tmp_path, monkeypatch):
+    rows = [_anchor_row("anch1")]
+    _v3_env_anchor(
+        tmp_path, monkeypatch, rows,
+        eval_uids={"band": ["other-a"], "collapse": ["other-b"], "misdirection": ["other-c"]},
+    )
+    assert upload_guard.validate_dataset()["rows"] == 1
+
+
+def test_v3_anchor_empty_tier_dict_refuses(tmp_path, monkeypatch):
+    # A dict whose buckets are all empty flattens to nothing -> same fail-closed
+    # path as a missing key, not a silent pass.
+    _v3_env_anchor(
+        tmp_path, monkeypatch, [_anchor_row("anch1")],
+        eval_uids={"band": [], "collapse": [], "misdirection": []},
+    )
     with pytest.raises(upload_guard.UploadRefused, match="eval_set_uids"):
         upload_guard.validate_dataset()
 

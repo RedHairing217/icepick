@@ -661,3 +661,39 @@ V3_EXPECTED_SPLIT_SHA256_16 = V3_EXPECTED_SPLIT_SHA256[:16]  # DERIVED -- same c
 # (assert_train_split_only), which always checks the LIVE split's
 # train_side_uids regardless of which sha16 a manifest recorded here.
 V3_ACCEPTED_MANIFEST_SPLIT_SHA16S = (EXPECTED_SPLIT_SHA256_16, V3_EXPECTED_SPLIT_SHA256_16)
+
+# --- v3b anchor_solved (2026-08-02, docs/SESSION_HANDOFF.md ledger
+# authorization @ 2abe292; PREREGISTRATION_V3.md Amendment 6 @ 0139327)
+# -----------------------------------------------------------------------
+# EVAL_SET_PATH (above, line ~280) is STALE for the anchor_solved lane: it
+# still points at evalharness/data/eval_set.jsonl, a 120-row file (100
+# eval_band + 10 anchor_solved + 10 anchor_fail -- evalharness's OWN,
+# UNRELATED "anchor_*" eval_slice vocabulary, not this module's
+# source_tier="anchor_solved") published 2026-07-25, BEFORE the
+# 2026-08-01 split rebuild -- verified by inspection: it predates and
+# does not correspond to V3_SPLIT_PATH's current 286-record eval set
+# (composition.eval_set_achieved_by_tier.total there). No committed
+# eval_set.jsonl matching the rebuilt split exists in this checkout as of
+# this writing (a candidate lives at
+# out/v3_full_run_20260801/shards/eval_records_resolved.jsonl, 286 rows,
+# gitignored run output -- not pinned here as a hard default because its
+# durability/location is not this module's call). v3.py's anchor-lane
+# code (_warn_if_eval_set_row_count_unexpected) surfaces a loud, NON-FATAL
+# stderr warning whenever a resolved --eval-set file's row count doesn't
+# match this expectation, rather than silently inheriting the stale
+# default or guessing at a hard-coded replacement path.
+V3_ANCHOR_EVAL_SET_EXPECTED_ROWS = 286
+
+# Stage-1 published hinted dataset (out/v3_full_run_20260801/sft_dataset/
+# sft_train.jsonl, gitignored run output, located by inspection 2026-08-02):
+# 390 rows, the FROZEN byte-unchanged comparison target for v3b's "the 390
+# hinted rows must come out byte-unchanged" invariant
+# (assert_hinted_subset_byte_unchanged). Exposed as a config default for
+# build-dataset's --hinted-reference-dataset flag (always an explicit,
+# overridable CLI arg -- never silently assumed); the expected sha16 below
+# is an early-refusal sanity pin on TOP OF the real guard, which is the
+# actual byte-for-byte per-row comparison against whatever path the flag
+# resolves to.
+V3_STAGE1_HINTED_DATASET_PATH = REPO_ROOT / "out/v3_full_run_20260801/sft_dataset/sft_train.jsonl"
+V3_STAGE1_HINTED_DATASET_EXPECTED_SHA16 = "ad65a6e13a3e4e05"
+V3_STAGE1_HINTED_DATASET_EXPECTED_ROWS = 390

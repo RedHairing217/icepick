@@ -1047,6 +1047,18 @@ against the pinned split `69735899…`): in `train_side_uids` **0/95** · in `ev
 their 78 distinct papers in `papers.eval_papers` **0/78**. The stock rule refuses everything; the
 replacement rule passes cleanly on the real data.
 
+**CORRECTION (same session, review of the published lane output).** The `eval_set_uids` figure above was
+computed with `set(split["eval_set_uids"])`, and that key is a **dict keyed by tier**
+(band/collapse/misdirection = 104/97/85 = 286), not a flat list — so the set was the three *tier names*
+and the "0/95" was vacuously true, testing nothing. Recomputed against the properly flattened 286-uid
+set, over the 70 rows the anchor lane actually published: in flattened `eval_set_uids` **0/70** · their
+57 distinct papers in `papers.eval_papers` **0/57** · missing `arxiv_id` **0/70** · in `train_side_uids`
+**0/70**. The conclusion is unchanged and the data was always clean — but the first pass did not
+establish it. The same mistake was present in the shipped guard (`243e41b`), where it silently reduced
+the uid-level eval check to a no-op that could never match; fixed here by flattening dict-or-list, with
+three regression tests pinning the dict shape, the clean-dict pass, and the all-empty-buckets refusal.
+Found by cross-checking the builder lane's independent loader, which flattened correctly, against mine.
+
 **Authorized delta (third, same class as the two above):** in `_validate_v3_dataset`, membership becomes
 tier-dispatched.
 
