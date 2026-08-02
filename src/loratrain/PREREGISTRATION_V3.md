@@ -285,3 +285,23 @@ Written before any arm generation. Two changes, both Nicky-directed today:
    instrument noise" — it does NOT test recipe replication (Amendment 3 §3
    stands; per-seed draw-luck is invisible at n=1). If the campaign extends,
    Amendment 1's 12-seed primary resumes per Amendment 3 §4.
+
+---
+
+# AMENDMENT 5 — solved-demotion magnitude parameter (Nicky, 2026-08-02 ~00:3xZ)
+
+Nicky's parameter adjustment, verbatim intent: "Any solved record that degrades
+by less than 4/16 move to null." Operative scoring change: a base-`solved`
+record that crosses down (to band/fail) scores **−1 only when its degradation
+Δ ≥ 4/16** (k=8-comparison equivalent: ≥ 2/8); smaller label-slips score 0.
+This applies the spec's existing magnitude criterion symmetrically to the
+solved boundary, removing the boundary-slip noise class (e.g. 13/16 → 6/8).
+
+TIMING DISCLOSURE (binding on the verdict): this amendment arrived AFTER
+interim reads of the stage-1 first-pass data (provisional tables posted to
+Nicky at ~00:2x–00:3xZ). It is therefore a post-hoc parameter relative to
+stage 1. The stage-1 verdict MUST report BOTH scorings side by side —
+registered-original (Amendment 1/spec) and adjusted (this amendment) — with
+the adjusted as Nicky's operative headline and the original as the
+pre-registered reference. Any future seeds inherit the adjusted rule
+prospectively (for them it is pre-read).
