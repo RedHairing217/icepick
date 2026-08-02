@@ -991,3 +991,42 @@ ruling without the filename and is untouched; no citing file edited. Root suite 
 passed + 3 skipped before and after. Same-class residue NOT fixed here (flagged for a
 future docs pass): the spec footer also cites memory names `gate-crossing-metric.md` and
 `verifier-self-verify-defect.md` that likewise don't exist in-repo.
+
+### GUARD — upload_guard v3 branch made fail-CLEAN (fail-safe gap closed; guard lane, 2026-08-02T00:39Z / 2026-08-01 ~17:39 local)
+
+Closes the training-ops review finding on commit `72cfc39`
+(`out/v3_full_run_20260801/opslog_train4x.md`, "fail-safe gap"): malformed
+prompt/completion shapes could escape `_validate_v3_dataset` as
+`build_dataset.TraceIntegrityError` — or as bare KeyError/IndexError/
+AttributeError from `_assert_v3_row`'s direct `row["prompt"][1]["content"]`
+indexing — through `main()`'s `except UploadRefused` (raw traceback instead of
+the module's documented refusal contract). Was fail-safe (crash before any scp),
+now fail-clean. Changes, all inside the v3 region (diff hunks at old lines
+217/239/258 only; legacy branch + `_check_manifest_corpus_sha` byte-unchanged):
+(1) `_assert_v3_row` — provenance must be a dict, prompt access shape-guarded
+before indexing; every malformed shape refuses naming the row, even when called
+without the wellformedness pre-pass; (2) `_validate_v3_dataset` — wellformedness
+now runs per-row (behavior-identical: the check is a pure per-example loop, and
+`build_dataset` itself calls it one-example-at-a-time), with
+`TraceIntegrityError` and any non-`UploadRefused`/`LeakageError` exception
+wrapped into `UploadRefused` naming the row; `LeakageError` still propagates as
+itself. +8 regression tests in `tests/test_upload_guard.py` covering the
+reviewer's shapes (missing prompt / single-message / missing content / non-dict
+messages / malformed completion / policy-failure class conversion / direct
+`_assert_v3_row` indexing / non-dict provenance). Suite (private basetemp):
+**672 passed + 2 skipped before → 680 passed + 2 skipped after**, both measured
+this session. **UNCOMMITTED per hold — no commits without Nicky's release**; the
+release commit should also update AGENTS.md's loratrain baseline (still says
+581+2, stale — 672+2 at HEAD `918584b` even before this change; 680+2 with it).
+FLAGGED, NOT changed (outside this task's row-access authorization): the v3
+branch's non-row accesses still violate the exception contract the same way —
+malformed `dataset_manifest.json` → `json.JSONDecodeError`, missing
+`V3_SPLIT_PATH` → `FileNotFoundError`, split JSON without `train_side_uids` →
+`KeyError` (legacy path wraps its manifest parse via `_check_manifest_corpus_sha`;
+the v3 branch parses inline). Needs its own authorization. $0 API, no launches,
+no Qwen, no pushes; parallel-session `RUNBOOK.md` edit + `Project_retrospective.docx`
+left untouched.
+
+### AUTHORIZATION — v3b anchor_solved class (orchestrator, 2026-08-02 ~01:2xZ; Nicky's release: proof-injection anchors, ≈$8 approved)
+
+Two authorized deltas for the v3b anchor path, orchestrator-implemented main-session (the established guard-edit pattern): (1) `loratrain/v3.py build-dataset` gains an explicit `--anchor-solutions` input — rows from it are constructed like hinted rows but bucketed `source_tier="anchor_solved"`, membership-checked NOT-in-eval (uid ∉ eval_set uids AND paper ∉ split eval_papers — these records are side-excluded solved-tier by the split ruling, repurposed as anchors per Nicky 2026-08-02), censused separately, never counted in the 60/40 blend arithmetic; the default (no flag) is byte-identical to current behavior. (2) `upload_guard._assert_v3_row` source_tier allowlist gains "anchor_solved". Tests both sides; suite from 672+2 (+ the adopted fail-clean fix's tests = 98-file baseline).
