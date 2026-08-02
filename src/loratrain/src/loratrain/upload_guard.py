@@ -247,10 +247,14 @@ def _assert_v3_row(row, rownum: int, dataset_path) -> str:
     sha = prov.get("proof_raw_sha")
     if not (isinstance(sha, str) and len(sha) == 64 and set(sha.lower()) <= _HEX64):
         raise UploadRefused(f"{dataset_path} row {rownum} (uid {uid}): proof_raw_sha is not 64-hex")
-    if prov.get("source_tier") not in ("band", "collapse"):
+    if prov.get("source_tier") not in ("band", "collapse", "anchor_solved"):
+        # "anchor_solved" added 2026-08-02 (ledger authorization commit
+        # 2abe292; Nicky's v3b proof-injection anchors): side-excluded
+        # solved-tier records repurposed as retention anchors, hint-
+        # regenerated like every other v3 row and censused separately.
         raise UploadRefused(
             f"{dataset_path} row {rownum} (uid {uid}): source_tier {prov.get('source_tier')!r} "
-            "not in ('band', 'collapse')"
+            "not in ('band', 'collapse', 'anchor_solved')"
         )
     prompt = row.get("prompt")
     if (
@@ -281,7 +285,14 @@ def _validate_v3_dataset(rows, dataset_path) -> dict:
     screen against the CURRENT eval set; a byte-identical file inherits that
     screen); membership re-asserted against the pinned v3 proof-split's
     train_side_uids (the old 200/100 eval frame is VOID for v3 data --
-    checking it would wrongly refuse former-holdout train rows)."""
+    checking it would wrongly refuse former-holdout train rows).
+
+    Membership is tier-dispatched (2026-08-02, v3b): band/collapse rows keep
+    the train_side_uids rule verbatim; ``anchor_solved`` rows -- solved-tier,
+    disjoint from the split's 921-record universe by construction -- are
+    instead checked NOT-in-eval at uid AND paper level. See the tier-dispatch
+    comment below and the ledger authorization for why that is the stricter
+    check, not a relaxation."""
     # Wellformedness runs per-row (fail-clean fix 2026-08-01; training-ops
     # review of 72cfc39, opslog_train4x.md "fail-safe gap"): a malformed
     # prompt/completion shape must refuse as UploadRefused naming the row,
@@ -311,6 +322,10 @@ def _validate_v3_dataset(rows, dataset_path) -> dict:
     ]
     if len(set(uids)) != len(uids):
         raise UploadRefused(f"{dataset_path}: duplicate uids in v3 dataset (cap1 violated)")
+    # Tier is re-read here (rather than returned by _assert_v3_row) to keep that
+    # function's single-value contract and its existing callers unchanged; the
+    # row shape is already fully validated by the time we get here.
+    tiers = [(row.get("provenance") or {}).get("source_tier") for row in rows]
 
     recomputed = build_dataset.sha256_file(dataset_path)
     manifest_path = Path(config.DATASET_MANIFEST_PATH)
@@ -335,13 +350,74 @@ def _validate_v3_dataset(rows, dataset_path) -> dict:
     import hashlib as _hashlib
     if _hashlib.sha256(split_bytes).hexdigest() != config.V3_EXPECTED_SPLIT_SHA256:
         raise UploadRefused(f"{split_path}: sha256 != pinned V3_EXPECTED_SPLIT_SHA256")
-    train_side = set(json.loads(split_bytes.decode("utf-8"))["train_side_uids"])
-    outside = [u for u in uids if u not in train_side]
+    split_obj = json.loads(split_bytes.decode("utf-8"))
+    train_side = set(split_obj["train_side_uids"])
+
+    # Membership is TIER-DISPATCHED (authorization: ledger entry "v3b
+    # anchor_solved membership exemption", 2026-08-02; prereg Amendment 6 =
+    # commit 0139327). band/collapse rows are unchanged -- they must be in the
+    # split's train side. "anchor_solved" rows are solved-tier and therefore
+    # disjoint from the split's 921-record band/collapse/misdirection universe
+    # BY CONSTRUCTION (censused 0/95 in train_side), so the train-side rule
+    # would refuse 100% of them. Their rule instead checks non-eval-ness
+    # DIRECTLY, at both uid and paper level -- stricter in the dimension this
+    # guard exists to protect, since train-side membership is only a
+    # positive-list proxy for "not eval".
+    anchor_tier = "anchor_solved"
+    outside = [
+        u for u, t in zip(uids, tiers)
+        if t != anchor_tier and u not in train_side
+    ]
     if outside:
         raise build_dataset.LeakageError(
             f"{dataset_path}: {len(outside)} row uid(s) outside the v3 split's train side "
             f"(first: {outside[:3]}) -- refusing."
         )
+
+    anchor_idx = [i for i, t in enumerate(tiers) if t == anchor_tier]
+    if anchor_idx:
+        # Both split fields are required for the anchor rule. Missing/empty is a
+        # CLEAN refusal, never a bare KeyError and never a silent skip: the whole
+        # point of the exemption is that these two checks replace the train-side
+        # one, so a split that cannot support them must stop the upload.
+        raw_eval_uids = split_obj.get("eval_set_uids")
+        if not raw_eval_uids:
+            raise UploadRefused(
+                f"{split_path}: eval_set_uids is missing or empty -- cannot run the "
+                f"{anchor_tier} uid-level eval-disjointness check; refusing rather than skipping it."
+            )
+        eval_uids = set(raw_eval_uids)
+        eval_papers = set((split_obj.get("papers") or {}).get("eval_papers") or [])
+        if not eval_papers:
+            raise UploadRefused(
+                f"{split_path}: papers.eval_papers is missing or empty -- cannot run the "
+                f"{anchor_tier} paper-level disjointness check; refusing rather than skipping it."
+            )
+        in_eval = [uids[i] for i in anchor_idx if uids[i] in eval_uids]
+        if in_eval:
+            raise build_dataset.LeakageError(
+                f"{dataset_path}: {len(in_eval)} {anchor_tier} row uid(s) are in the v3 split's "
+                f"eval set (first: {in_eval[:3]}) -- refusing."
+            )
+        no_paper, bad_paper = [], []
+        for i in anchor_idx:
+            paper = ((rows[i].get("provenance") or {}).get("arxiv_id") or "")
+            paper = paper.strip() if isinstance(paper, str) else ""
+            if not paper:
+                no_paper.append(uids[i])
+            elif paper in eval_papers:
+                bad_paper.append((uids[i], paper))
+        if no_paper:
+            raise UploadRefused(
+                f"{dataset_path}: {len(no_paper)} {anchor_tier} row(s) carry no provenance.arxiv_id "
+                f"(first: {no_paper[:3]}) -- the paper-level eval-disjointness check cannot run on "
+                "them; refusing rather than passing them silently."
+            )
+        if bad_paper:
+            raise build_dataset.LeakageError(
+                f"{dataset_path}: {len(bad_paper)} {anchor_tier} row(s) come from papers in the v3 "
+                f"split's eval set (first: {bad_paper[:3]}) -- refusing."
+            )
     return {"sha256": recomputed, "rows": len(rows)}
 
 

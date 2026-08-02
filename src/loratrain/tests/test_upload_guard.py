@@ -969,6 +969,134 @@ def test_v3_uid_outside_train_side_is_leakage(tmp_path, monkeypatch):
         upload_guard.validate_dataset()
 
 
+# ----------------------------------------------------------------------------
+# v3b anchor_solved membership exemption (2026-08-02; ledger authorization
+# "v3b anchor_solved membership exemption", prereg Amendment 6 = 0139327).
+# anchor_solved rows are solved-tier and disjoint from the split's 921-record
+# universe by construction (censused 0/95 in train_side_uids), so the train-side
+# rule would refuse 100% of them. They are instead checked NOT-in-eval at uid
+# AND paper level. These tests pin BOTH halves: the exemption works, and it does
+# not leak to any other tier or silently skip when the split can't support it.
+# ----------------------------------------------------------------------------
+
+
+def _v3_env_anchor(tmp_path, monkeypatch, rows, *, eval_uids=("some-eval-uid",),
+                   eval_papers=("9999.99999",),
+                   train_side=None, omit_eval_uids=False, omit_papers=False):
+    """_v3_env, but with a split that carries the eval-side fields the anchor
+    rule needs. train_side defaults to the NON-anchor uids only -- i.e. the
+    real-world shape, where no anchor uid is on the train side."""
+    import hashlib as _h
+    import json as _j
+    from loratrain import build_dataset as _bd, config as _cfg
+    ds = tmp_path / "sft_train.jsonl"
+    ds.write_text("\n".join(_j.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    if train_side is None:
+        train_side = [
+            r["provenance"]["uid"] for r in rows
+            if r["provenance"].get("source_tier") != "anchor_solved"
+        ] + ["spare"]
+    split = {"train_side_uids": list(train_side)}
+    if not omit_eval_uids:
+        split["eval_set_uids"] = list(eval_uids)
+    if not omit_papers:
+        split["papers"] = {"eval_papers": list(eval_papers)}
+    sp = tmp_path / "split.json"
+    sp.write_text(_j.dumps(split), encoding="utf-8")
+    man = {
+        "dataset": {"sha256": _bd.sha256_file(ds)},
+        "inputs": {"corpus": {"sha256": _cfg.EXPECTED_CORPUS_SHA256}},
+    }
+    mp = tmp_path / "dataset_manifest.json"
+    mp.write_text(_j.dumps(man), encoding="utf-8")
+    monkeypatch.setattr(_cfg, "SFT_DATASET_PATH", ds)
+    monkeypatch.setattr(_cfg, "DATASET_MANIFEST_PATH", mp)
+    monkeypatch.setattr(_cfg, "V3_SPLIT_PATH", sp)
+    monkeypatch.setattr(_cfg, "V3_EXPECTED_SPLIT_SHA256", _h.sha256(sp.read_bytes()).hexdigest())
+    return ds
+
+
+def _anchor_row(uid="anch1", *, paper="1234.56789"):
+    row = _v3_row(uid, tier="anchor_solved")
+    row["provenance"]["arxiv_id"] = paper
+    return row
+
+
+def test_v3_anchor_solved_not_in_train_side_passes(tmp_path, monkeypatch):
+    # THE core case: an anchor uid absent from train_side_uids must NOT refuse.
+    # This is the exact shape that would otherwise kill 100% of a v3b upload.
+    rows = [_v3_row("v3u1"), _anchor_row("anch1")]
+    _v3_env_anchor(tmp_path, monkeypatch, rows)
+    out = upload_guard.validate_dataset()
+    assert out["rows"] == 2
+
+
+def test_v3_anchor_solved_in_eval_set_is_leakage(tmp_path, monkeypatch):
+    from loratrain import build_dataset as _bd
+    rows = [_anchor_row("anch1")]
+    _v3_env_anchor(tmp_path, monkeypatch, rows, eval_uids=("anch1",))
+    with pytest.raises(_bd.LeakageError, match="eval set"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_anchor_solved_from_eval_paper_is_leakage(tmp_path, monkeypatch):
+    from loratrain import build_dataset as _bd
+    rows = [_anchor_row("anch1", paper="1234.56789")]
+    _v3_env_anchor(tmp_path, monkeypatch, rows, eval_papers=("1234.56789",))
+    with pytest.raises(_bd.LeakageError, match="eval set"):
+        upload_guard.validate_dataset()
+
+
+@pytest.mark.parametrize("bad", [None, "", "   "])
+def test_v3_anchor_solved_without_arxiv_id_refuses(tmp_path, monkeypatch, bad):
+    # No paper => the paper-level check cannot run => hard refusal, never a pass.
+    row = _anchor_row("anch1")
+    row["provenance"]["arxiv_id"] = bad
+    _v3_env_anchor(tmp_path, monkeypatch, [row])
+    with pytest.raises(upload_guard.UploadRefused, match="arxiv_id"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_anchor_exemption_does_not_leak_to_band_rows(tmp_path, monkeypatch):
+    # Regression: the presence of a valid anchor row must not excuse a band row
+    # that is off the train side.
+    from loratrain import build_dataset as _bd
+    rows = [_v3_row("v3u1"), _anchor_row("anch1")]
+    _v3_env_anchor(tmp_path, monkeypatch, rows, train_side=["spare"])
+    with pytest.raises(_bd.LeakageError, match="train side"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_anchor_missing_eval_set_uids_refuses(tmp_path, monkeypatch):
+    _v3_env_anchor(tmp_path, monkeypatch, [_anchor_row("anch1")], omit_eval_uids=True)
+    with pytest.raises(upload_guard.UploadRefused, match="eval_set_uids"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_anchor_empty_eval_set_uids_refuses(tmp_path, monkeypatch):
+    # An EMPTY eval list is refused just like a missing one: for this split an
+    # empty eval side means the file is not the split we think it is, and the
+    # anchor rule has nothing to check against. Fail closed.
+    _v3_env_anchor(tmp_path, monkeypatch, [_anchor_row("anch1")], eval_uids=())
+    with pytest.raises(upload_guard.UploadRefused, match="eval_set_uids"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_anchor_missing_eval_papers_refuses(tmp_path, monkeypatch):
+    _v3_env_anchor(tmp_path, monkeypatch, [_anchor_row("anch1")], omit_papers=True)
+    with pytest.raises(upload_guard.UploadRefused, match="eval_papers"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_non_anchor_path_untouched_by_dispatch(tmp_path, monkeypatch):
+    # A pure band/collapse dataset must behave exactly as before: the anchor
+    # branch never runs, so a split with no eval fields at all is still fine.
+    rows = [_v3_row("v3u1"), _v3_row("v3u2", tier="collapse")]
+    _v3_env(tmp_path, monkeypatch, rows)
+    out = upload_guard.validate_dataset()
+    assert out["rows"] == 2
+
+
 def test_mixed_shapes_refuse(tmp_path, monkeypatch):
     legacy = {"prompt": [{"role": "system", "content": "x"}, {"role": "user", "content": "y /no_think"}],
               "completion": [{"role": "assistant", "content": "z"}],

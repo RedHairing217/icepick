@@ -1030,3 +1030,35 @@ left untouched.
 ### AUTHORIZATION — v3b anchor_solved class (orchestrator, 2026-08-02 ~01:2xZ; Nicky's release: proof-injection anchors, ≈$8 approved)
 
 Two authorized deltas for the v3b anchor path, orchestrator-implemented main-session (the established guard-edit pattern): (1) `loratrain/v3.py build-dataset` gains an explicit `--anchor-solutions` input — rows from it are constructed like hinted rows but bucketed `source_tier="anchor_solved"`, membership-checked NOT-in-eval (uid ∉ eval_set uids AND paper ∉ split eval_papers — these records are side-excluded solved-tier by the split ruling, repurposed as anchors per Nicky 2026-08-02), censused separately, never counted in the 60/40 blend arithmetic; the default (no flag) is byte-identical to current behavior. (2) `upload_guard._assert_v3_row` source_tier allowlist gains "anchor_solved". Tests both sides; suite from 672+2 (+ the adopted fail-clean fix's tests = 98-file baseline).
+
+### AUTHORIZATION — v3b anchor_solved membership exemption in `upload_guard._validate_v3_dataset` (orchestrator, 2026-08-02; resume window)
+
+**Gap found at v3b resume, not covered by the authorization above.** That entry authorized the
+`_assert_v3_row` source_tier allowlist, which is necessary but NOT sufficient: `_validate_v3_dataset`
+separately re-asserts that *every* row uid is in the pinned v3 split's `train_side_uids` (491 uids,
+`upload_guard.py` ~line 342). `anchor_solved` records are **solved-tier**, and solved is disjoint from
+the split's 921-record band/collapse/misdirection universe by construction (independently censused in
+`out/v3b_anchor_scoping_20260802T005353Z/`: "Solved uids also present in the split's 921-record 3-tier
+universe: 0"). A merged v3b dataset would therefore refuse at upload with a `LeakageError` on 100% of
+its anchor rows — after the anchor drafting, regeneration and training cost is already sunk.
+
+Measured at authorization time over the 95 proof-bearing anchor candidates (orchestrator, first-hand,
+against the pinned split `69735899…`): in `train_side_uids` **0/95** · in `eval_set_uids` **0/95** ·
+their 78 distinct papers in `papers.eval_papers` **0/78**. The stock rule refuses everything; the
+replacement rule passes cleanly on the real data.
+
+**Authorized delta (third, same class as the two above):** in `_validate_v3_dataset`, membership becomes
+tier-dispatched.
+
+- Rows with `source_tier` in ("band", "collapse") — **unchanged**: must be in `train_side_uids`.
+- Rows with `source_tier == "anchor_solved"` — the equal-or-stricter NOT-in-eval rule that Amendment 6
+  (`0139327`) and authorization `2abe292` already fixed for the builder: uid ∉ split `eval_set_uids`
+  AND `provenance.arxiv_id` ∉ split `papers.eval_papers`, with a missing or blank `arxiv_id` a hard
+  refusal (no silent pass). This is *stricter* than the train-side rule in the dimension the guard
+  exists to protect: train-side membership is a positive-list proxy for "not eval", whereas the anchor
+  rule checks non-eval-ness directly at both uid and paper level — and paper-level disjointness is the
+  stronger of the two (it is the criterion that excluded 91 records when the eval set was built).
+
+Same guard-edit pattern as the previous two: ledger entry first, orchestrator implements main-session
+(subagent edits to guard files are blocked by the platform), tests alongside, and no behavior change on
+any legacy path or any v3 non-anchor path. Suite baseline to be re-measured at integration.
