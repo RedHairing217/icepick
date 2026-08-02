@@ -974,3 +974,20 @@ For any lane verifying orchestrator messages against this ledger:
 ### AUTHORIZATION — upload_guard accepts v3-shaped dataset provenance (orchestrator, 2026-08-01 ~19:1xZ)
 
 Blocker: `upload_guard.validate_dataset()` → `build_dataset.assert_verified_correct` requires v1/v2 provenance (`verdict`/`verbatim_output`/`rollout_uid`); the v3 dataset's rows carry v3 provenance (`verify_receipt`/`regen_sample_idx`/`proof_raw_sha`/`source_tier`) by reviewed design (v3.py's `verify_written_v3_dataset` docstring records the deliberate fork). The parallel-training lane is AUTHORIZED to extend `validate_dataset()` with a per-row provenance-shape dispatch: v1/v2 shape → existing check byte-unchanged; v3 shape → inline equal-strictness checks (uid present; `verify_receipt.verified is True`; `regen_sample_idx` int ≥ 0; `proof_raw_sha` 64-hex; `source_tier` ∈ {band, collapse}; prompt does NOT contain `config.V3_HINT_MARKER`; prompt/completion wellformedness via the existing build_dataset helper). NO import of `loratrain.v3` from upload_guard (isolation: nothing existing imports v3 — use config constants + inline checks). Tests required for both branches + refusal cases; suite from 665+2. Orchestrator reviews + commits after; the stage-1 upload may proceed on the working-tree guard once its own tests pass.
+
+### DOCS — split ruling's cited record backfilled (docs session, 2026-08-02 ~00:2xZ / still 2026-08-01 local)
+
+An agent auditing a former-holdout publish task found that the split ruling's cited written
+source — `split-rebuild-2026-08-01.md`, named at `docs/v3_full_run_skeleton.md` §0,
+`docs/gate_crossing_scoring_spec.md`'s footer, and six `loratrain/v3.py` sites (incl. two
+runtime refusal strings) — existed NOWHERE in the repo: the name is a session-memory note
+kept outside it. The ruling itself was never in doubt (verbatim across the citing files;
+enforced by `7510b2a`; eval=286 accepted in prereg Amendment 1 `c581ff9`), but a reader
+verifying a leakage-relevant ruling by opening the cited file would have found nothing.
+**Backfilled as `docs/split-rebuild-2026-08-01.md`** (committed with this note): ruling,
+frozen-artifact composition + full sha256 (re-verified from disk), code enforcement,
+consequences, provenance. Docs-only, additive; `config.py`'s RETIRE-NOTE describes the
+ruling without the filename and is untouched; no citing file edited. Root suite 1035
+passed + 3 skipped before and after. Same-class residue NOT fixed here (flagged for a
+future docs pass): the spec footer also cites memory names `gate-crossing-metric.md` and
+`verifier-self-verify-defect.md` that likewise don't exist in-repo.
