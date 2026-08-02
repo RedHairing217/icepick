@@ -214,8 +214,24 @@ _HEX64 = frozenset("0123456789abcdef")
 def _assert_v3_row(row, rownum: int, dataset_path) -> str:
     """Equal-strictness per-row checks for a v3-shaped row; returns its uid.
     Inline by design -- importing ``loratrain.v3`` here would break the
-    isolation rule that no existing module imports v3."""
-    prov = row.get("provenance") or {}
+    isolation rule that no existing module imports v3.
+
+    Fail-clean (2026-08-01; training-ops review of 72cfc39, see
+    out/v3_full_run_20260801/opslog_train4x.md "fail-safe gap"): every
+    access below is shape-guarded so a malformed row raises UploadRefused
+    naming the row -- never a bare KeyError/IndexError/AttributeError/
+    TypeError -- even when this function runs without
+    ``_validate_v3_dataset``'s wellformedness pre-pass in front of it.
+    The prompt guard checks only what this function itself reads
+    (``prompt[1]["content"]``); full schema strictness (pinned system
+    prompt, no-think suffix, completion shape) stays with
+    ``build_dataset.assert_prompt_completion_wellformed``."""
+    prov = row.get("provenance")
+    if not isinstance(prov, dict):
+        raise UploadRefused(
+            f"{dataset_path} row {rownum}: v3 row provenance is not a dict "
+            f"(got {type(prov).__name__})"
+        )
     uid = prov.get("uid")
     if not uid or not isinstance(uid, str):
         raise UploadRefused(f"{dataset_path} row {rownum}: v3 row missing provenance.uid")
@@ -236,7 +252,18 @@ def _assert_v3_row(row, rownum: int, dataset_path) -> str:
             f"{dataset_path} row {rownum} (uid {uid}): source_tier {prov.get('source_tier')!r} "
             "not in ('band', 'collapse')"
         )
-    user_content = row["prompt"][1]["content"]
+    prompt = row.get("prompt")
+    if (
+        not isinstance(prompt, list)
+        or len(prompt) != 2
+        or not isinstance(prompt[1], dict)
+        or not isinstance(prompt[1].get("content"), str)
+    ):
+        raise UploadRefused(
+            f"{dataset_path} row {rownum} (uid {uid}): malformed prompt shape -- "
+            "expected [system, user] message dicts with string user content."
+        )
+    user_content = prompt[1]["content"]
     if config.V3_HINT_MARKER in user_content:
         raise UploadRefused(
             f"{dataset_path} row {rownum} (uid {uid}): training prompt contains the hint marker -- "
@@ -255,7 +282,29 @@ def _validate_v3_dataset(rows, dataset_path) -> dict:
     screen); membership re-asserted against the pinned v3 proof-split's
     train_side_uids (the old 200/100 eval frame is VOID for v3 data --
     checking it would wrongly refuse former-holdout train rows)."""
-    build_dataset.assert_prompt_completion_wellformed(rows)
+    # Wellformedness runs per-row (fail-clean fix 2026-08-01; training-ops
+    # review of 72cfc39, opslog_train4x.md "fail-safe gap"): a malformed
+    # prompt/completion shape must refuse as UploadRefused naming the row,
+    # not escape main()'s `except UploadRefused` as TraceIntegrityError --
+    # nor as a bare AttributeError when a message entry is not a dict (the
+    # check's own ``prompt[0].get`` access). Per-row calls are behavior-
+    # identical to the previous one-shot call: the check is a pure
+    # per-example loop that raises on its first bad example (build_dataset
+    # itself also invokes it one example at a time). LeakageError -- and a
+    # nested UploadRefused -- pass through unwrapped: the catch-all must
+    # never re-class those two (module contract, validate_dataset docstring).
+    for rownum, row in enumerate(rows, start=1):
+        try:
+            build_dataset.assert_prompt_completion_wellformed([row])
+        except build_dataset.TraceIntegrityError as exc:
+            raise UploadRefused(f"{dataset_path} row {rownum}: {exc}") from exc
+        except (UploadRefused, build_dataset.LeakageError):
+            raise
+        except Exception as exc:
+            raise UploadRefused(
+                f"{dataset_path} row {rownum}: malformed prompt/completion shape "
+                f"broke the wellformedness check itself ({type(exc).__name__}: {exc})"
+            ) from exc
     uids = [
         _assert_v3_row(row, rownum, dataset_path)
         for rownum, row in enumerate(rows, start=1)

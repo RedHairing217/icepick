@@ -976,3 +976,98 @@ def test_mixed_shapes_refuse(tmp_path, monkeypatch):
     _v3_env(tmp_path, monkeypatch, [_v3_row("v3u1"), legacy])
     with pytest.raises(upload_guard.UploadRefused, match="MIXED"):
         upload_guard.validate_dataset()
+
+
+# ----------------------------------------------------------------------------
+# Fail-clean regressions (2026-08-01): the training-ops review of 72cfc39
+# (out/v3_full_run_20260801/opslog_train4x.md, "fail-safe gap") found malformed
+# prompt/completion shapes escaping _validate_v3_dataset as TraceIntegrityError
+# -- or as bare KeyError/IndexError/AttributeError from _assert_v3_row's direct
+# row["prompt"][1]["content"] indexing -- instead of the module's documented
+# UploadRefused contract. pytest.raises(UploadRefused) below is load-bearing:
+# UploadRefused is a SIBLING of TraceIntegrityError (both RuntimeError), so any
+# unconverted escape fails the test with the original exception.
+# ----------------------------------------------------------------------------
+
+
+def test_v3_missing_prompt_refuses_cleanly(tmp_path, monkeypatch):
+    # the KeyError shape: row has no "prompt" key at all
+    row = _v3_row("v3u1")
+    del row["prompt"]
+    _v3_env(tmp_path, monkeypatch, [row])
+    with pytest.raises(upload_guard.UploadRefused, match=r"row 1"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_single_message_prompt_refuses_cleanly(tmp_path, monkeypatch):
+    # the IndexError shape: row["prompt"][1] does not exist
+    row = _v3_row("v3u1")
+    row["prompt"] = row["prompt"][:1]
+    _v3_env(tmp_path, monkeypatch, [row])
+    with pytest.raises(upload_guard.UploadRefused, match=r"row 1"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_user_message_without_content_refuses_cleanly(tmp_path, monkeypatch):
+    # the KeyError shape one level down: row["prompt"][1]["content"] absent
+    row = _v3_row("v3u1")
+    del row["prompt"][1]["content"]
+    _v3_env(tmp_path, monkeypatch, [row])
+    with pytest.raises(upload_guard.UploadRefused, match=r"row 1"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_non_dict_prompt_messages_refuse_cleanly(tmp_path, monkeypatch):
+    # non-dict message entries crash assert_prompt_completion_wellformed
+    # ITSELF (its prompt[0].get -> AttributeError); must still refuse cleanly
+    row = _v3_row("v3u1")
+    row["prompt"] = ["system text", "user text"]
+    _v3_env(tmp_path, monkeypatch, [row])
+    with pytest.raises(upload_guard.UploadRefused, match=r"row 1"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_malformed_completion_refuses_cleanly(tmp_path, monkeypatch):
+    row = _v3_row("v3u1")
+    row["completion"] = "not a message list"
+    _v3_env(tmp_path, monkeypatch, [row])
+    with pytest.raises(upload_guard.UploadRefused, match=r"row 1"):
+        upload_guard.validate_dataset()
+
+
+def test_v3_wellformedness_policy_failure_refuses_not_trace_integrity(tmp_path, monkeypatch):
+    # the opslog's exact class complaint: a shape the row-access guard
+    # tolerates (empty user content indexes fine) but wellformedness rejects
+    # must surface as UploadRefused, not TraceIntegrityError
+    row = _v3_row("v3u1")
+    row["prompt"][1]["content"] = ""
+    _v3_env(tmp_path, monkeypatch, [row])
+    with pytest.raises(upload_guard.UploadRefused, match=r"row 1"):
+        upload_guard.validate_dataset()
+
+
+def test_assert_v3_row_guards_its_own_prompt_indexing():
+    # defense-in-depth: even called directly, WITHOUT the wellformedness
+    # pre-pass, every malformed prompt shape refuses naming the row --
+    # never KeyError/IndexError/TypeError from row["prompt"][1]["content"]
+    base = _v3_row("v3u1")
+    for bad_prompt in (
+        None,                                                     # .get miss
+        [],                                                       # [1] IndexError
+        [{"role": "system", "content": "s"}],                     # [1] IndexError
+        [{"role": "system", "content": "s"}, {"role": "user"}],   # ["content"] KeyError
+        [{"role": "system", "content": "s"}, "user text"],        # ["content"] TypeError
+        [{"role": "system", "content": "s"}, {"role": "user", "content": 7}],  # `in` TypeError
+    ):
+        row = dict(base, prompt=bad_prompt)
+        with pytest.raises(upload_guard.UploadRefused, match=r"row 3"):
+            upload_guard._assert_v3_row(row, 3, "ds.jsonl")
+
+
+def test_assert_v3_row_guards_non_dict_provenance():
+    # direct-call defense: a truthy non-dict provenance previously hit
+    # `prov.get` -> AttributeError (unreachable via validate_dataset, whose
+    # dispatch requires a dict, but this function must stand alone)
+    row = dict(_v3_row("v3u1"), provenance="not a dict")
+    with pytest.raises(upload_guard.UploadRefused, match=r"row 3"):
+        upload_guard._assert_v3_row(row, 3, "ds.jsonl")
