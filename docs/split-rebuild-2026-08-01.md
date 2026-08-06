@@ -18,6 +18,11 @@ except historical provenance (pre-v3 arms stay pinned to it for their own histor
 supersedes the 2026-07-26 repoint that had made `corpus_split_200_100.json`
 authoritative.
 
+> **Correction 1 (2026-08-06) applies to the paragraph above.** "The holdout concept is
+> retired" means the artifact, the two-set code contract, and the name. Held-out
+> evaluation continues on the rebuilt split, and the leakage guard came out stricter.
+> See Corrections at the bottom of this file.
+
 **New split rule: proof-bearing → train, proofless → eval**, over the full 921-record
 3-tier universe (band + collapse + misdirection). `solved` records are excluded as
 useless; `drop` records are excluded as having failed posedness testing. Proof
@@ -107,3 +112,46 @@ leakage-relevant ruling, so a future reader trying to verify it by opening the c
 would find nothing. Backfilled strictly from the sources above; the split sha256 and the
 artifact's composition fields were re-computed/re-read from disk at write time. Docs-only
 — no code behavior changed.
+
+## Corrections
+
+Appended per the status line at the top. The ruling is preserved as written and
+corrections are recorded here rather than edited in.
+
+### Correction 1 (2026-08-06): the wording "the holdout concept is retired"
+
+**The ruling paragraph overstates what was retired, and the plain reading of it is
+wrong.** "The holdout concept is retired, holdout no longer exists" reads as an
+abandonment of held-out evaluation. That is not what happened, and it is not what the
+rest of this file records.
+
+**What was retired:** the old split artifact (`corpus_split_200_100.json`, sha
+`768436f4…`), the two-set `(train_uids, holdout_uids)` code contract that carried it, the
+specific records inside it, and the name.
+
+**What was not retired:** held-out evaluation. The composition table above freezes 286
+eval records against 468 train records, paper-disjoint at 238 eval papers vs 386
+train-side papers, intersection 0, independently re-verified at freeze. The eval side is
+a holdout in every functional sense. It is the same practice partitioned by a measured
+rule instead of an arbitrary one, and proof availability was tested against difficulty
+before the rule was adopted (Mann-Whitney p = 0.918) precisely so the partition could not
+smuggle in a difficulty confound.
+
+**The guard was strengthened, not weakened,** which this file already states in the code
+enforcement section. The holdout-specific `LeakageError` branch was replaced by
+`UnknownUidError`, which fires on any uid not on the train side: one refusal covering
+more offender classes than the two it replaced.
+
+**The rename is what drove the wording.** Every record in the old holdout was reallocated
+under the new rule, so nothing measured on the new split is comparable to the old 43/100
+baseline, and keeping the name would have invited exactly that comparison. Retiring the
+word is not retiring the practice.
+
+**Accurate one-line statement of the ruling:** the holdout was rebuilt on a measured
+partition rule; the old holdout artifact was voided because its records were reallocated
+and can never serve as eval again for any model trained on them; the leakage guard came
+out stricter than it went in.
+
+Raised 2026-08-06 while correcting the project documentation, after the original wording
+was carried verbatim into the repo README and had to be walked back there. No ruling and
+no code behavior changed. Wording only.
